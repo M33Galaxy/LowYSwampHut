@@ -7,15 +7,24 @@ import java.awt.*;
 import java.io.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.function.Consumer;
 
 public class LowYSwampHutForFixedSeed extends JFrame {
-    // 默认值
+    // 默认值 - 单种子搜索
     private static final int DEFAULT_MIN_X = -58594;
     private static final int DEFAULT_MAX_X = 58593;
     private static final int DEFAULT_MIN_Z = -58594;
     private static final int DEFAULT_MAX_Z = 58593;
+    // 默认值 - 从种子列表搜索
+    private static final int DEFAULT_LIST_MIN_X = -128;
+    private static final int DEFAULT_LIST_MAX_X = 128;
+    private static final int DEFAULT_LIST_MIN_Z = -128;
+    private static final int DEFAULT_LIST_MAX_Z = 128;
     private static final int DEFAULT_THREAD_COUNT = 8;
     
+    // 单种子搜索相关组件
     private JTextField searchSeedField;
     private JTextField searchThreadCountField;
     private JComboBox<String> maxHeightComboBox;
@@ -45,12 +54,46 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     private double lastSearchMaxHeight = 0;
     private int lastSearchThreadCount = 0;
     
+    // 从种子列表搜索相关组件
+    private JButton listSearchSeedFileButton;
+    private JLabel listSearchSeedFileLabel;
+    private File selectedSeedFile;
+    private JTextField listSearchThreadCountField;
+    private JComboBox<String> listMaxHeightComboBox;
+    private JComboBox<String> listVersionComboBox;
+    private JTextField listMinXField;
+    private JTextField listMaxXField;
+    private JTextField listMinZField;
+    private JTextField listMaxZField;
+    private JButton listSearchStartButton;
+    private JButton listSearchPauseButton;
+    private JButton listSearchStopButton;
+    private JButton listSearchResetButton;
+    private JButton listSearchExportButton;
+    private JButton listSearchExportSeedListButton;
+    private JButton listSortByYButton;
+    private JButton listSortByDistanceButton;
+    private JProgressBar listSearchProgressBar;
+    private JLabel listSearchElapsedTimeLabel;
+    private JLabel listSearchRemainingTimeLabel;
+    private JTextArea listSearchResultArea;
+    private SearchCoords listSearcher;
+    private volatile boolean isListSearchRunning = false;
+    private volatile boolean isListSearchPaused = false;
+    private int lastListSearchMinX = 0;
+    private int lastListSearchMaxX = 0;
+    private int lastListSearchMinZ = 0;
+    private int lastListSearchMaxZ = 0;
+    private double lastListSearchMaxHeight = 0;
+    private int lastListSearchThreadCount = 0;
+    // 存储每个种子的结果
+    private Map<Long, List<String>> seedResults = new HashMap<>();
     
     // 加载的字体
     private Font loadedFont = null;
 
     public LowYSwampHutForFixedSeed() {
-        setTitle("Minecraft Java版定种低y女巫小屋搜素工具");
+        setTitle("Minecraft Java版低y女巫小屋搜素工具");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLayout(new BorderLayout());
         
@@ -60,17 +103,19 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         // 设置中文字体
         setChineseFont();
 
-        // 直接添加搜索面板，不再使用标签页
-        JPanel searchPanel = createSearchPanel();
-        add(searchPanel, BorderLayout.CENTER);
+        // 创建标签页
+        JTabbedPane tabbedPane = new JTabbedPane();
+        tabbedPane.addTab("单种子搜索", createSingleSeedSearchPanel());
+        tabbedPane.addTab("从种子列表搜索", createListSearchPanel());
+        add(tabbedPane, BorderLayout.CENTER);
         
         pack();
         setSize(1200, 800);
         setLocationRelativeTo(null);
     }
 
-    // 创建搜索面板（第一个功能）
-    private JPanel createSearchPanel() {
+    // 创建单种子搜索面板
+    private JPanel createSingleSeedSearchPanel() {
         JPanel mainPanel = new JPanel(new BorderLayout());
         mainPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
@@ -824,6 +869,269 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         minZField.setText(String.valueOf(DEFAULT_MIN_Z));
         maxZField.setText(String.valueOf(DEFAULT_MAX_Z));
     }
+    
+    // 创建从种子列表搜索面板
+    private JPanel createListSearchPanel() {
+        JPanel mainPanel = new JPanel(new BorderLayout());
+        mainPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+        // 左侧：输入和进度
+        JPanel leftPanel = new JPanel(new BorderLayout());
+        
+        // 输入区域
+        JPanel inputPanel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.anchor = GridBagConstraints.WEST;
+
+        // Seed 文件选择
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        JLabel seedLabel = new JLabel("种子文件:");
+        seedLabel.setFont(getLoadedFont());
+        inputPanel.add(seedLabel, gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        JPanel seedFilePanel = new JPanel(new BorderLayout());
+        listSearchSeedFileButton = new JButton("选择文件");
+        listSearchSeedFileButton.addActionListener(e -> selectSeedFile());
+        listSearchSeedFileLabel = new JLabel("未选择文件");
+        listSearchSeedFileLabel.setFont(getLoadedFont());
+        seedFilePanel.add(listSearchSeedFileButton, BorderLayout.WEST);
+        seedFilePanel.add(listSearchSeedFileLabel, BorderLayout.CENTER);
+        inputPanel.add(seedFilePanel, gbc);
+
+        // Thread Count 输入
+        gbc.gridx = 0;
+        gbc.gridy = 1;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        JLabel threadLabel = new JLabel("线程数:");
+        threadLabel.setFont(getLoadedFont());
+        inputPanel.add(threadLabel, gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        listSearchThreadCountField = new JTextField(String.valueOf(DEFAULT_THREAD_COUNT), 20);
+        listSearchThreadCountField.addFocusListener(new java.awt.event.FocusAdapter() {
+            public void focusLost(java.awt.event.FocusEvent e) {
+                validateIntegerInput(listSearchThreadCountField, "线程数");
+            }
+        });
+        inputPanel.add(listSearchThreadCountField, gbc);
+
+        // 高度筛选下拉框
+        gbc.gridx = 0;
+        gbc.gridy = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        JLabel heightLabel = new JLabel("筛选女巫小屋高度(高度越高搜索越慢):");
+        heightLabel.setFont(getLoadedFont());
+        inputPanel.add(heightLabel, gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        String[] heightOptions = {"0", "-10", "-20", "-30", "-40"};
+        listMaxHeightComboBox = new JComboBox<>(heightOptions);
+        listMaxHeightComboBox.setSelectedIndex(4); // 默认选择 -40
+        inputPanel.add(listMaxHeightComboBox, gbc);
+
+        // 版本选择下拉框
+        gbc.gridx = 0;
+        gbc.gridy = 3;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        JLabel versionLabel = new JLabel("版本:");
+        versionLabel.setFont(getLoadedFont());
+        inputPanel.add(versionLabel, gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        String[] versionOptions = {"1.21.1", "1.20.1", "1.19.2", "1.18.2"};
+        listVersionComboBox = new JComboBox<>(versionOptions);
+        listVersionComboBox.setSelectedIndex(0); // 默认选择 1.21.1
+        inputPanel.add(listVersionComboBox, gbc);
+
+        // MinX 输入
+        gbc.gridx = 0;
+        gbc.gridy = 4;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        JLabel minXLabel = new JLabel("MinX(x512):");
+        minXLabel.setFont(getLoadedFont());
+        inputPanel.add(minXLabel, gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        listMinXField = new JTextField(String.valueOf(DEFAULT_LIST_MIN_X), 20);
+        listMinXField.addFocusListener(new java.awt.event.FocusAdapter() {
+            public void focusLost(java.awt.event.FocusEvent e) {
+                validateIntegerInput(listMinXField, "MinX");
+            }
+        });
+        inputPanel.add(listMinXField, gbc);
+
+        // MaxX 输入
+        gbc.gridx = 0;
+        gbc.gridy = 5;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        JLabel maxXLabel = new JLabel("MaxX(x512):");
+        maxXLabel.setFont(getLoadedFont());
+        inputPanel.add(maxXLabel, gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        listMaxXField = new JTextField(String.valueOf(DEFAULT_LIST_MAX_X), 20);
+        listMaxXField.addFocusListener(new java.awt.event.FocusAdapter() {
+            public void focusLost(java.awt.event.FocusEvent e) {
+                validateIntegerInput(listMaxXField, "MaxX");
+            }
+        });
+        inputPanel.add(listMaxXField, gbc);
+
+        // MinZ 输入
+        gbc.gridx = 0;
+        gbc.gridy = 6;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        JLabel minZLabel = new JLabel("MinZ(x512):");
+        minZLabel.setFont(getLoadedFont());
+        inputPanel.add(minZLabel, gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        listMinZField = new JTextField(String.valueOf(DEFAULT_LIST_MIN_Z), 20);
+        listMinZField.addFocusListener(new java.awt.event.FocusAdapter() {
+            public void focusLost(java.awt.event.FocusEvent e) {
+                validateIntegerInput(listMinZField, "MinZ");
+            }
+        });
+        inputPanel.add(listMinZField, gbc);
+
+        // MaxZ 输入
+        gbc.gridx = 0;
+        gbc.gridy = 7;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        JLabel maxZLabel = new JLabel("MaxZ(x512):");
+        maxZLabel.setFont(getLoadedFont());
+        inputPanel.add(maxZLabel, gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        listMaxZField = new JTextField(String.valueOf(DEFAULT_LIST_MAX_Z), 20);
+        listMaxZField.addFocusListener(new java.awt.event.FocusAdapter() {
+            public void focusLost(java.awt.event.FocusEvent e) {
+                validateIntegerInput(listMaxZField, "MaxZ");
+            }
+        });
+        inputPanel.add(listMaxZField, gbc);
+
+        // 按钮区域
+        JPanel buttonPanel = new JPanel(new FlowLayout());
+        listSearchStartButton = new JButton("开始搜索");
+        listSearchPauseButton = new JButton("暂停");
+        listSearchStopButton = new JButton("停止");
+        listSearchResetButton = new JButton("重置搜索区域为默认值");
+        listSearchPauseButton.setEnabled(false);
+        listSearchStopButton.setEnabled(false);
+        buttonPanel.add(listSearchStartButton);
+        buttonPanel.add(listSearchPauseButton);
+        buttonPanel.add(listSearchStopButton);
+        buttonPanel.add(listSearchResetButton);
+
+        // 静态文字展示区域（放在按钮上方）
+        JPanel creditPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        creditPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        JLabel creditLabel = new JLabel("<html><div style='text-align: center;'><br><br><br><br><br>每一个种子<br>都有一个低y女巫小屋的梦想<br>——SunnySlopes<br>作者：b站@M33三角座星系<br>字体：江城黑体</div></html>");
+        creditLabel.setFont(getLoadedFont());
+        creditPanel.add(creditLabel);
+
+        // 将 credit 和按钮放在一个容器中，credit 在上，按钮在下
+        JPanel creditButtonPanel = new JPanel(new BorderLayout());
+        creditButtonPanel.add(creditPanel, BorderLayout.NORTH);
+        creditButtonPanel.add(buttonPanel, BorderLayout.SOUTH);
+
+        // 进度区域
+        JPanel progressPanel = new JPanel(new GridBagLayout());
+        GridBagConstraints pgc = new GridBagConstraints();
+        pgc.insets = new Insets(5, 5, 5, 5);
+        pgc.anchor = GridBagConstraints.WEST;
+        pgc.fill = GridBagConstraints.HORIZONTAL;
+        pgc.weightx = 1.0;
+
+        pgc.gridx = 0;
+        pgc.gridy = 0;
+        pgc.gridwidth = 2;
+        listSearchProgressBar = new JProgressBar(0, 100);
+        listSearchProgressBar.setStringPainted(true);
+        listSearchProgressBar.setString("进度: 0/0 (0.00%)");
+        progressPanel.add(listSearchProgressBar, pgc);
+
+        pgc.gridwidth = 1;
+        pgc.gridy = 1;
+        listSearchElapsedTimeLabel = new JLabel("已过时间: 0天 0时 0分 0秒");
+        progressPanel.add(listSearchElapsedTimeLabel, pgc);
+
+        pgc.gridy = 3;
+        listSearchRemainingTimeLabel = new JLabel("剩余时间: 计算中...");
+        progressPanel.add(listSearchRemainingTimeLabel, pgc);
+
+        leftPanel.add(inputPanel, BorderLayout.NORTH);
+        leftPanel.add(creditButtonPanel, BorderLayout.CENTER);
+        
+        // 将进度区域放在另一个容器中
+        JPanel leftBottomPanel = new JPanel(new BorderLayout());
+        leftBottomPanel.add(progressPanel, BorderLayout.CENTER);
+        
+        JPanel leftContainer = new JPanel(new BorderLayout());
+        leftContainer.add(leftPanel, BorderLayout.CENTER);
+        leftContainer.add(leftBottomPanel, BorderLayout.SOUTH);
+
+        // 右侧：结果显示
+        JPanel rightPanel = new JPanel(new BorderLayout());
+        rightPanel.setBorder(BorderFactory.createTitledBorder("检查结果(真实小屋y值可能会处于输出坐标±1格以内，且不能保证每个坐标都能实际生成小屋)"));
+        listSearchResultArea = new JTextArea();
+        listSearchResultArea.setEditable(false);
+        listSearchResultArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        JScrollPane scrollPane = new JScrollPane(listSearchResultArea);
+        scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
+        JPanel exportPanel = new JPanel(new FlowLayout());
+        listSearchExportButton = new JButton("导出");
+        listSearchExportButton.addActionListener(e -> exportListSearchResults());
+        listSearchExportSeedListButton = new JButton("导出种子列表");
+        listSearchExportSeedListButton.addActionListener(e -> exportSeedList());
+        listSortByYButton = new JButton("按最低y排序");
+        listSortByYButton.addActionListener(e -> sortListByLowestY());
+        listSortByDistanceButton = new JButton("按距离排序");
+        listSortByDistanceButton.addActionListener(e -> sortListByDistance());
+        exportPanel.add(listSearchExportButton);
+        exportPanel.add(listSearchExportSeedListButton);
+        exportPanel.add(listSortByYButton);
+        exportPanel.add(listSortByDistanceButton);
+        rightPanel.add(scrollPane, BorderLayout.CENTER);
+        rightPanel.add(exportPanel, BorderLayout.SOUTH);
+
+        // 使用 JSplitPane 分割
+        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftContainer, rightPanel);
+        splitPane.setDividerLocation(450);
+        splitPane.setResizeWeight(0.5);
+
+        mainPanel.add(splitPane, BorderLayout.CENTER);
+
+        // 添加事件监听
+        listSearchStartButton.addActionListener(e -> startListSearch());
+        listSearchPauseButton.addActionListener(e -> toggleListSearchPause());
+        listSearchStopButton.addActionListener(e -> stopListSearch());
+        listSearchResetButton.addActionListener(e -> resetListSearchToDefaults());
+
+        // 添加输入字段监听，检测参数变化
+        addListSearchParameterListeners();
+
+        return mainPanel;
+    }
 
     private void updateSearchProgress(SearchCoords.ProgressInfo info) {
         SwingUtilities.invokeLater(() -> {
@@ -1009,6 +1317,753 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             case "1.21.1":
             default:
                 return MCVersion.v1_21;
+        }
+    }
+    
+    // ========== 从种子列表搜索相关方法 ==========
+    
+    // 添加搜索参数监听器，检测参数变化（不包括线程数）
+    private void addListSearchParameterListeners() {
+        // 高度筛选变化监听
+        listMaxHeightComboBox.addActionListener(e -> checkListSearchParameterChange());
+        
+        // 坐标变化监听
+        listMinXField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { checkListSearchParameterChange(); }
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { checkListSearchParameterChange(); }
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { checkListSearchParameterChange(); }
+        });
+        listMaxXField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { checkListSearchParameterChange(); }
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { checkListSearchParameterChange(); }
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { checkListSearchParameterChange(); }
+        });
+        listMinZField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { checkListSearchParameterChange(); }
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { checkListSearchParameterChange(); }
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { checkListSearchParameterChange(); }
+        });
+        listMaxZField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { checkListSearchParameterChange(); }
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { checkListSearchParameterChange(); }
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { checkListSearchParameterChange(); }
+        });
+    }
+    
+    // 检查搜索参数是否变化（除了线程数）
+    private void checkListSearchParameterChange() {
+        if (isListSearchRunning && !isListSearchPaused) {
+            return; // 运行中且未暂停，不检查
+        }
+        
+        if (!isListSearchPaused) {
+            return; // 未暂停，不检查
+        }
+        
+        try {
+            if (selectedSeedFile == null) {
+                return;
+            }
+            String selectedHeight = (String) listMaxHeightComboBox.getSelectedItem();
+            assert selectedHeight != null;
+            double maxHeight = Double.parseDouble(selectedHeight);
+            int minX = Integer.parseInt(listMinXField.getText().trim());
+            int maxX = Integer.parseInt(listMaxXField.getText().trim());
+            int minZ = Integer.parseInt(listMinZField.getText().trim());
+            int maxZ = Integer.parseInt(listMaxZField.getText().trim());
+            
+            // 如果参数变化且处于暂停状态，重置进度（线程数变化不触发重置）
+            if (minX != lastListSearchMinX || 
+                maxX != lastListSearchMaxX || minZ != lastListSearchMinZ || maxZ != lastListSearchMaxZ || 
+                maxHeight != lastListSearchMaxHeight) {
+                // 停止当前搜索
+                if (listSearcher != null) {
+                    listSearcher.stop();
+                }
+                isListSearchRunning = false;
+                isListSearchPaused = false;
+                listSearchStartButton.setEnabled(true);
+                listSearchPauseButton.setEnabled(false);
+                listSearchPauseButton.setText("暂停");
+                listSearchStopButton.setEnabled(false);
+                listSearchResetButton.setEnabled(true);
+                listSearchSeedFileButton.setEnabled(true);
+                listSearchThreadCountField.setEnabled(true);
+                listMaxHeightComboBox.setEnabled(true);
+                listVersionComboBox.setEnabled(true);
+                listMinXField.setEnabled(true);
+                listMaxXField.setEnabled(true);
+                listMinZField.setEnabled(true);
+                listMaxZField.setEnabled(true);
+                listSearchResultArea.setText("");
+                listSearchProgressBar.setValue(0);
+                listSearchProgressBar.setString("进度: 0/0 (0.00%)");
+                listSearchRemainingTimeLabel.setText("剩余时间: 已重置（参数已更改）");
+            }
+        } catch (NumberFormatException e) {
+            // 忽略无效输入
+        }
+    }
+    
+    // 选择种子文件
+    private void selectSeedFile() {
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDialogTitle("选择种子文件");
+        fileChooser.setFileFilter(new FileNameExtensionFilter("文本文件 (*.txt)", "txt"));
+        
+        int result = fileChooser.showOpenDialog(this);
+        if (result == JFileChooser.APPROVE_OPTION) {
+            selectedSeedFile = fileChooser.getSelectedFile();
+            listSearchSeedFileLabel.setText(selectedSeedFile.getName());
+        }
+    }
+    
+    // 读取种子列表
+    private List<Long> readSeedList(File file) throws IOException {
+        List<Long> seeds = new ArrayList<>();
+        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) {
+                    continue;
+                }
+                try {
+                    long seed = Long.parseLong(line);
+                    seeds.add(seed);
+                } catch (NumberFormatException e) {
+                    // 跳过无效的种子行
+                    System.err.println("跳过无效的种子行: " + line);
+                }
+            }
+        }
+        return seeds;
+    }
+    
+    // 搜索相关方法
+    private void startListSearch() {
+        // 如果当前处于暂停状态，直接恢复（不重新开始）
+        if (isListSearchRunning && isListSearchPaused) {
+            // 检查线程数是否变化
+            try {
+                String threadText = listSearchThreadCountField.getText().trim();
+                int threadCount = Integer.parseInt(threadText);
+                if (threadCount < 1) {
+                    JOptionPane.showMessageDialog(this, "线程数必须大于0", "错误", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                
+                // 检查线程数是否超过CPU核数
+                int cpuThreads = Runtime.getRuntime().availableProcessors();
+                if (threadCount > cpuThreads) {
+                    int result = JOptionPane.showConfirmDialog(
+                        this,
+                        "线程数超过CPU核数（" + cpuThreads + "），是否自动调整为" + cpuThreads + "？",
+                        "提示",
+                        JOptionPane.YES_NO_OPTION,
+                        JOptionPane.QUESTION_MESSAGE
+                    );
+                    if (result == JOptionPane.YES_OPTION) {
+                        threadCount = cpuThreads;
+                        listSearchThreadCountField.setText(String.valueOf(cpuThreads));
+                    } else {
+                        return;
+                    }
+                }
+                
+                // 如果线程数变化，调整线程数（不弹框，不清除进度）
+                if (threadCount != lastListSearchThreadCount) {
+                    // 获取版本参数
+                    String selectedVersion = (String) listVersionComboBox.getSelectedItem();
+                    MCVersion mcVersion = getMCVersion(selectedVersion != null ? selectedVersion : "1.21.1");
+                    
+                    // 如果版本变化，需要重新创建searcher
+                    if (listSearcher == null || !listSearcher.getMCVersion().equals(mcVersion)) {
+                        listSearcher = new SearchCoords(mcVersion);
+                    }
+                    
+                    // 批量处理模式下，暂停/恢复功能简化处理
+                    // 直接恢复当前种子的搜索
+                    if (listSearcher != null) {
+                        listSearcher.resume();
+                    }
+                    isListSearchPaused = false;
+                    listSearchPauseButton.setText("暂停");
+                    listSearchThreadCountField.setEnabled(false);
+                    return;
+                } else {
+                    // 线程数没变化，直接恢复
+                    if (listSearcher != null) {
+                        listSearcher.resume();
+                    }
+                    isListSearchPaused = false;
+                    listSearchPauseButton.setText("暂停");
+                    listSearchThreadCountField.setEnabled(false);
+                    return;
+                }
+            } catch (NumberFormatException e) {
+                JOptionPane.showMessageDialog(this, 
+                    "线程数格式错误，无法继续", 
+                    "错误", 
+                    JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+        }
+        
+        try {
+            // 验证种子文件
+            if (selectedSeedFile == null || !selectedSeedFile.exists()) {
+                JOptionPane.showMessageDialog(this, "请选择种子文件", "错误", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            
+            // 读取种子列表
+            List<Long> seeds;
+            try {
+                seeds = readSeedList(selectedSeedFile);
+                if (seeds.isEmpty()) {
+                    JOptionPane.showMessageDialog(this, "种子文件为空或没有有效的种子", "错误", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                // 在导入时设置进度条为0/种子数
+                final long totalSeeds = seeds.size();
+                SwingUtilities.invokeLater(() -> {
+                    listSearchProgressBar.setMaximum((int) totalSeeds);
+                    listSearchProgressBar.setValue(0);
+                    listSearchProgressBar.setString(String.format("进度: 0/%d (0.00%%)", totalSeeds));
+                });
+            } catch (IOException e) {
+                JOptionPane.showMessageDialog(this, "读取种子文件失败: " + e.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            
+            // 验证线程数
+            String threadText = listSearchThreadCountField.getText().trim();
+            double threadDouble;
+            try {
+                threadDouble = Double.parseDouble(threadText);
+                if (threadDouble != Math.floor(threadDouble)) {
+                    JOptionPane.showMessageDialog(this, "线程数必须为整数", "错误", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+            } catch (NumberFormatException e) {
+                JOptionPane.showMessageDialog(this, "线程数格式错误，请输入整数", "错误", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            
+            int threadCount = (int) threadDouble;
+            if (threadCount < 1) {
+                JOptionPane.showMessageDialog(this, "线程数必须大于0", "错误", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            
+            // 检查线程数是否超过CPU核数
+            int cpuThreads = Runtime.getRuntime().availableProcessors();
+            if (threadCount > cpuThreads) {
+                int result = JOptionPane.showConfirmDialog(
+                    this,
+                    "线程数超过CPU核数（" + cpuThreads + "），是否自动调整为" + cpuThreads + "？",
+                    "提示",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.QUESTION_MESSAGE
+                );
+                if (result == JOptionPane.YES_OPTION) {
+                    threadCount = cpuThreads;
+                    listSearchThreadCountField.setText(String.valueOf(cpuThreads));
+                } else {
+                    return;
+                }
+            }
+            
+            String selectedHeight = (String) listMaxHeightComboBox.getSelectedItem();
+            assert selectedHeight != null;
+            double maxHeight = Double.parseDouble(selectedHeight);
+            
+            // 验证XZ坐标
+            String minXText = listMinXField.getText().trim();
+            String maxXText = listMaxXField.getText().trim();
+            String minZText = listMinZField.getText().trim();
+            String maxZText = listMaxZField.getText().trim();
+            
+            // 检查是否为整数
+            double minXDouble, maxXDouble, minZDouble, maxZDouble;
+            try {
+                minXDouble = Double.parseDouble(minXText);
+                if (minXDouble != Math.floor(minXDouble)) {
+                    JOptionPane.showMessageDialog(this, "MinX必须为整数，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                    listMinXField.setText(String.valueOf(DEFAULT_LIST_MIN_X));
+                    return;
+                }
+            } catch (NumberFormatException e) {
+                JOptionPane.showMessageDialog(this, "MinX格式错误，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                listMinXField.setText(String.valueOf(DEFAULT_LIST_MIN_X));
+                return;
+            }
+            
+            try {
+                maxXDouble = Double.parseDouble(maxXText);
+                if (maxXDouble != Math.floor(maxXDouble)) {
+                    JOptionPane.showMessageDialog(this, "MaxX必须为整数，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                    listMaxXField.setText(String.valueOf(DEFAULT_LIST_MAX_X));
+                    return;
+                }
+            } catch (NumberFormatException e) {
+                JOptionPane.showMessageDialog(this, "MaxX格式错误，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                listMaxXField.setText(String.valueOf(DEFAULT_LIST_MAX_X));
+                return;
+            }
+            
+            try {
+                minZDouble = Double.parseDouble(minZText);
+                if (minZDouble != Math.floor(minZDouble)) {
+                    JOptionPane.showMessageDialog(this, "MinZ必须为整数，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                    listMinZField.setText(String.valueOf(DEFAULT_LIST_MIN_Z));
+                    return;
+                }
+            } catch (NumberFormatException e) {
+                JOptionPane.showMessageDialog(this, "MinZ格式错误，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                listMinZField.setText(String.valueOf(DEFAULT_LIST_MIN_Z));
+                return;
+            }
+            
+            try {
+                maxZDouble = Double.parseDouble(maxZText);
+                if (maxZDouble != Math.floor(maxZDouble)) {
+                    JOptionPane.showMessageDialog(this, "MaxZ必须为整数，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                    listMaxZField.setText(String.valueOf(DEFAULT_LIST_MAX_Z));
+                    return;
+                }
+            } catch (NumberFormatException e) {
+                JOptionPane.showMessageDialog(this, "MaxZ格式错误，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                listMaxZField.setText(String.valueOf(DEFAULT_LIST_MAX_Z));
+                return;
+            }
+            
+            int minX = (int) minXDouble;
+            int maxX = (int) maxXDouble;
+            int minZ = (int) minZDouble;
+            int maxZ = (int) maxZDouble;
+            
+            if (minX >= maxX) {
+                JOptionPane.showMessageDialog(this, "MinX 必须小于 MaxX", "错误", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            
+            if (minZ >= maxZ) {
+                JOptionPane.showMessageDialog(this, "MinZ 必须小于 MaxZ", "错误", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            
+            // 保存当前参数
+            lastListSearchMinX = minX;
+            lastListSearchMaxX = maxX;
+            lastListSearchMinZ = minZ;
+            lastListSearchMaxZ = maxZ;
+            lastListSearchMaxHeight = maxHeight;
+            lastListSearchThreadCount = threadCount;
+
+            isListSearchRunning = true;
+            isListSearchPaused = false;
+            listSearchStartButton.setEnabled(false);
+            listSearchPauseButton.setEnabled(true);
+            listSearchPauseButton.setText("暂停");
+            listSearchStopButton.setEnabled(true);
+            listSearchResetButton.setEnabled(false);
+            listSearchSeedFileButton.setEnabled(false);
+            listSearchThreadCountField.setEnabled(false);
+            listMaxHeightComboBox.setEnabled(false);
+            listVersionComboBox.setEnabled(false);
+            listMinXField.setEnabled(false);
+            listMaxXField.setEnabled(false);
+            listMinZField.setEnabled(false);
+            listMaxZField.setEnabled(false);
+            listSearchResultArea.setText("");
+            listSearchElapsedTimeLabel.setText("已过时间: 0天 0时 0分 0秒");
+            listSearchRemainingTimeLabel.setText("剩余时间: 计算中...");
+            
+            // 清空之前的结果
+            seedResults.clear();
+
+            // 获取选择的版本
+            String selectedVersion = (String) listVersionComboBox.getSelectedItem();
+            MCVersion mcVersion = getMCVersion(selectedVersion != null ? selectedVersion : "1.21.1");
+
+            // 在新线程中批量处理所有种子
+            final int finalThreadCount = threadCount;
+            final long totalSeeds = seeds.size();
+            final long startTime = System.currentTimeMillis();
+            new Thread(() -> {
+                final int[] processedSeedsRef = {0};
+                
+                for (long seed : seeds) {
+                    if (!isListSearchRunning) {
+                        break;
+                    }
+                    
+                    seedResults.put(seed, new ArrayList<>());
+                    
+                    listSearcher = new SearchCoords(mcVersion);
+                    final long currentSeed = seed;
+                    
+                    // 创建结果回调，按种子分组
+                    Consumer<String> seedResultCallback = result -> {
+                        seedResults.get(currentSeed).add(result);
+                    };
+                    
+                    // 创建进度回调，但不更新总体进度（只用于单个种子的内部进度）
+                    Consumer<SearchCoords.ProgressInfo> seedProgressCallback = info -> {
+                        // 单个种子的进度不更新总体进度条，总体进度条只显示种子数
+                    };
+                    
+                    // 检查当前种子对应区域有无满足条件的女巫小屋
+                    listSearcher.startSearch(seed, finalThreadCount, minX, maxX, minZ, maxZ, maxHeight, 
+                            seedProgressCallback, seedResultCallback);
+                    
+                    // 等待当前种子搜索完成
+                    while (listSearcher.isRunning() && isListSearchRunning) {
+                        // 暂停时等待
+                        while (isListSearchPaused && isListSearchRunning) {
+                            try {
+                                Thread.sleep(100);
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                return;
+                            }
+                        }
+                        if (!isListSearchRunning) {
+                            break;
+                        }
+                        try {
+                            Thread.sleep(100);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                    }
+                    
+                    processedSeedsRef[0]++;
+                    
+                    // 更新进度条：完成种子数/总种子数
+                    final int completedSeeds = processedSeedsRef[0];
+                    final long elapsedMs = System.currentTimeMillis() - startTime;
+                    final long remainingMs = completedSeeds > 0 ? (elapsedMs * (totalSeeds - completedSeeds) / completedSeeds) : 0;
+                    final double percentage = (double) completedSeeds / totalSeeds * 100.0;
+                    
+                    SwingUtilities.invokeLater(() -> {
+                        listSearchProgressBar.setValue(completedSeeds);
+                        listSearchProgressBar.setString(String.format("进度: %d/%d (%.2f%%)", completedSeeds, totalSeeds, percentage));
+                        if (!isListSearchPaused) {
+                            listSearchElapsedTimeLabel.setText("已过时间: " + formatTime(elapsedMs));
+                            if (remainingMs > 0) {
+                                listSearchRemainingTimeLabel.setText("剩余时间: " + formatTime(remainingMs));
+                            } else {
+                                listSearchRemainingTimeLabel.setText("剩余时间: 计算中...");
+                            }
+                        }
+                    });
+                    
+                    // 输出当前种子的结果（如果有满足条件的女巫小屋）
+                    List<String> results = seedResults.get(seed);
+                    if (!results.isEmpty()) {
+                        SwingUtilities.invokeLater(() -> {
+                            listSearchResultArea.append(seed + "\n");
+                            for (String result : results) {
+                                listSearchResultArea.append(result + "\n");
+                            }
+                            listSearchResultArea.setCaretPosition(listSearchResultArea.getDocument().getLength());
+                        });
+                    }
+                }
+                
+                // 所有种子处理完成
+                final long finalElapsedMs = System.currentTimeMillis() - startTime;
+                SwingUtilities.invokeLater(() -> {
+                    isListSearchRunning = false;
+                    isListSearchPaused = false;
+                    listSearchStartButton.setEnabled(true);
+                    listSearchPauseButton.setEnabled(false);
+                    listSearchPauseButton.setText("暂停");
+                    listSearchStopButton.setEnabled(false);
+                    listSearchResetButton.setEnabled(true);
+                    listSearchSeedFileButton.setEnabled(true);
+                    listSearchThreadCountField.setEnabled(true);
+                    listMaxHeightComboBox.setEnabled(true);
+                    listVersionComboBox.setEnabled(true);
+                    listMinXField.setEnabled(true);
+                    listMaxXField.setEnabled(true);
+                    listMinZField.setEnabled(true);
+                    listMaxZField.setEnabled(true);
+                    listSearchProgressBar.setValue((int) totalSeeds);
+                    listSearchProgressBar.setString(String.format("进度: %d/%d (100.00%%) - 完成", totalSeeds, totalSeeds));
+                    listSearchElapsedTimeLabel.setText("已过时间: " + formatTime(finalElapsedMs));
+                    listSearchRemainingTimeLabel.setText("剩余时间: 已完成");
+                });
+            }).start();
+
+        } catch (NumberFormatException e) {
+            JOptionPane.showMessageDialog(this, "请输入有效的数字", "错误", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void toggleListSearchPause() {
+        if (listSearcher == null || !isListSearchRunning) {
+            return;
+        }
+        
+        if (isListSearchPaused) {
+            // 恢复（线程数变化会在startListSearch中处理）
+            listSearcher.resume();
+            isListSearchPaused = false;
+            listSearchPauseButton.setText("暂停");
+            listSearchThreadCountField.setEnabled(false); // 恢复后不能修改线程数
+        } else {
+            // 暂停
+            listSearcher.pause();
+            isListSearchPaused = true;
+            listSearchPauseButton.setText("继续");
+            listSearchThreadCountField.setEnabled(true); // 暂停时可以修改线程数
+        }
+    }
+
+    private void stopListSearch() {
+        if (listSearcher != null) {
+            listSearcher.stop();
+        }
+        isListSearchRunning = false;
+        isListSearchPaused = false;
+        listSearchStartButton.setEnabled(true);
+        listSearchPauseButton.setEnabled(false);
+        listSearchPauseButton.setText("暂停");
+        listSearchStopButton.setEnabled(false);
+        listSearchResetButton.setEnabled(true);
+        listSearchSeedFileButton.setEnabled(true);
+        listSearchThreadCountField.setEnabled(true);
+        listMaxHeightComboBox.setEnabled(true);
+        listVersionComboBox.setEnabled(true);
+        listMinXField.setEnabled(true);
+        listMaxXField.setEnabled(true);
+        listMinZField.setEnabled(true);
+        listMaxZField.setEnabled(true);
+        listSearchRemainingTimeLabel.setText("剩余时间: 已停止");
+    }
+
+    private void resetListSearchToDefaults() {
+        listMinXField.setText(String.valueOf(DEFAULT_LIST_MIN_X));
+        listMaxXField.setText(String.valueOf(DEFAULT_LIST_MAX_X));
+        listMinZField.setText(String.valueOf(DEFAULT_LIST_MIN_Z));
+        listMaxZField.setText(String.valueOf(DEFAULT_LIST_MAX_Z));
+    }
+    
+    // 解析结果文本，返回种子和坐标的映射
+    private Map<Long, List<Coordinate>> parseListResults() {
+        Map<Long, List<Coordinate>> parsedResults = new HashMap<>();
+        String text = listSearchResultArea.getText().trim();
+        if (text.isEmpty()) {
+            return parsedResults;
+        }
+        
+        String[] lines = text.split("\n");
+        Long currentSeed = null;
+        
+        for (String line : lines) {
+            line = line.trim();
+            if (line.isEmpty()) {
+                continue;
+            }
+            
+            // 尝试解析为种子（长整数）
+            try {
+                long seed = Long.parseLong(line);
+                currentSeed = seed;
+                if (!parsedResults.containsKey(seed)) {
+                    parsedResults.put(seed, new ArrayList<>());
+                }
+            } catch (NumberFormatException e) {
+                // 不是种子，可能是坐标
+                if (line.startsWith("/tp ") && currentSeed != null) {
+                    String[] parts = line.substring(4).trim().split("\\s+");
+                    if (parts.length >= 3) {
+                        try {
+                            int x = (int) Double.parseDouble(parts[0]);
+                            double y = Double.parseDouble(parts[1]);
+                            int z = (int) Double.parseDouble(parts[2]);
+                            parsedResults.get(currentSeed).add(new Coordinate(x, y, z, line));
+                        } catch (NumberFormatException ex) {
+                            // 跳过无效的坐标行
+                        }
+                    }
+                }
+            }
+        }
+        
+        return parsedResults;
+    }
+    
+    // 坐标类
+    private static class Coordinate {
+        final int x;
+        final double y;
+        final int z;
+        final String originalLine;
+        
+        Coordinate(int x, double y, int z, String originalLine) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+            this.originalLine = originalLine;
+        }
+        
+        // 计算到原点的距离的平方（x² + z²），用于排序
+        double distanceSquared() {
+            return (double) x * x + (double) z * z;
+        }
+    }
+    
+    // 按最低y排序
+    private void sortListByLowestY() {
+        Map<Long, List<Coordinate>> parsedResults = parseListResults();
+        if (parsedResults.isEmpty()) {
+            return;
+        }
+        
+        // 创建种子和最低y值的列表
+        List<Map.Entry<Long, Double>> seedYList = new ArrayList<>();
+        for (Map.Entry<Long, List<Coordinate>> entry : parsedResults.entrySet()) {
+            double minY = entry.getValue().stream()
+                    .mapToDouble(c -> c.y)
+                    .min()
+                    .orElse(Double.MAX_VALUE);
+            seedYList.add(new java.util.AbstractMap.SimpleEntry<>(entry.getKey(), minY));
+        }
+        
+        // 按最低y值排序（从低到高）
+        seedYList.sort((a, b) -> Double.compare(a.getValue(), b.getValue()));
+        
+        // 重新构建结果文本
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<Long, Double> entry : seedYList) {
+            Long seed = entry.getKey();
+            List<Coordinate> coords = parsedResults.get(seed);
+            sb.append(seed).append("\n");
+            for (Coordinate coord : coords) {
+                sb.append(coord.originalLine).append("\n");
+            }
+        }
+        
+        listSearchResultArea.setText(sb.toString());
+    }
+    
+    // 按距离原点由近到远排序
+    private void sortListByDistance() {
+        Map<Long, List<Coordinate>> parsedResults = parseListResults();
+        if (parsedResults.isEmpty()) {
+            return;
+        }
+        
+        // 创建种子和最近距离的列表（如果同一种子有多个坐标，取最近的那个）
+        // 使用 x² + z² 作为排序依据
+        List<Map.Entry<Long, Double>> seedDistanceList = new ArrayList<>();
+        for (Map.Entry<Long, List<Coordinate>> entry : parsedResults.entrySet()) {
+            double minDistanceSquared = entry.getValue().stream()
+                    .mapToDouble(Coordinate::distanceSquared)
+                    .min()
+                    .orElse(0.0);
+            seedDistanceList.add(new java.util.AbstractMap.SimpleEntry<>(entry.getKey(), minDistanceSquared));
+        }
+        
+        // 按距离排序（从近到远，即从小到大）
+        seedDistanceList.sort((a, b) -> Double.compare(a.getValue(), b.getValue()));
+        
+        // 重新构建结果文本
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<Long, Double> entry : seedDistanceList) {
+            Long seed = entry.getKey();
+            List<Coordinate> coords = parsedResults.get(seed);
+            sb.append(seed).append("\n");
+            for (Coordinate coord : coords) {
+                sb.append(coord.originalLine).append("\n");
+            }
+        }
+        
+        listSearchResultArea.setText(sb.toString());
+    }
+    
+    private void exportListSearchResults() {
+        if (listSearchResultArea.getText().trim().isEmpty()) {
+            JOptionPane.showMessageDialog(this, "没有结果可导出", "提示", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDialogTitle("导出搜索结果");
+        fileChooser.setFileFilter(new FileNameExtensionFilter("文本文件 (*.txt)", "txt"));
+        fileChooser.setSelectedFile(new File("search_output.txt"));
+
+        int result = fileChooser.showSaveDialog(this);
+        if (result == JFileChooser.APPROVE_OPTION) {
+            File file = fileChooser.getSelectedFile();
+            try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
+                writer.print(listSearchResultArea.getText());
+                JOptionPane.showMessageDialog(this, "导出成功！", "成功", JOptionPane.INFORMATION_MESSAGE);
+            } catch (IOException e) {
+                JOptionPane.showMessageDialog(this, "导出失败: " + e.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+    }
+    
+    // 导出种子列表（不含/tp坐标）
+    private void exportSeedList() {
+        if (listSearchResultArea.getText().trim().isEmpty()) {
+            JOptionPane.showMessageDialog(this, "没有结果可导出", "提示", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        // 解析结果，提取所有种子
+        String text = listSearchResultArea.getText().trim();
+        String[] lines = text.split("\n");
+        List<Long> seeds = new ArrayList<>();
+        
+        for (String line : lines) {
+            line = line.trim();
+            if (line.isEmpty()) {
+                continue;
+            }
+            // 跳过/tp开头的坐标行
+            if (line.startsWith("/tp ")) {
+                continue;
+            }
+            // 尝试解析为种子
+            try {
+                long seed = Long.parseLong(line);
+                if (!seeds.contains(seed)) {
+                    seeds.add(seed);
+                }
+            } catch (NumberFormatException e) {
+                // 忽略无效行
+            }
+        }
+        
+        if (seeds.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "没有找到种子", "提示", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDialogTitle("导出种子列表");
+        fileChooser.setFileFilter(new FileNameExtensionFilter("文本文件 (*.txt)", "txt"));
+        fileChooser.setSelectedFile(new File("seed_list.txt"));
+
+        int result = fileChooser.showSaveDialog(this);
+        if (result == JFileChooser.APPROVE_OPTION) {
+            File file = fileChooser.getSelectedFile();
+            try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
+                for (Long seed : seeds) {
+                    writer.println(seed);
+                }
+                JOptionPane.showMessageDialog(this, "导出成功！共导出 " + seeds.size() + " 个种子", "成功", JOptionPane.INFORMATION_MESSAGE);
+            } catch (IOException e) {
+                JOptionPane.showMessageDialog(this, "导出失败: " + e.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
+            }
         }
     }
 
