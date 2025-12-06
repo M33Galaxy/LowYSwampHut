@@ -42,6 +42,7 @@ public class SearchCoords {
     private AtomicLong currentProcessedCount;
     private Consumer<String> currentResultCallback;
     private int currentThreadCount;
+    private boolean currentCheckGeneration;
 
     public static class ProgressInfo {
         public final long processed;
@@ -65,10 +66,10 @@ public class SearchCoords {
     }
 
     public void startSearch(long seed, int threadCount, int minX, int maxX, int minZ, int maxZ, double maxHeight,
-                          Consumer<ProgressInfo> progressCallback, Consumer<String> resultCallback) {
+                          Consumer<ProgressInfo> progressCallback, Consumer<String> resultCallback, boolean checkGeneration) {
         // 如果正在运行且处于暂停状态，且线程数变化，则调整线程数
         if (isRunning && isPaused && threadCount != currentThreadCount) {
-            adjustThreadCount(threadCount, resultCallback);
+            adjustThreadCount(threadCount, resultCallback, checkGeneration);
             return;
         }
         
@@ -89,6 +90,7 @@ public class SearchCoords {
         currentMaxHeight = maxHeight;
         currentThreadCount = threadCount;
         currentResultCallback = resultCallback;
+        currentCheckGeneration = checkGeneration;
 
         executor = Executors.newFixedThreadPool(threadCount);
         int totalX = maxX - minX;
@@ -143,7 +145,7 @@ public class SearchCoords {
         for (int i = 0; i < threadCount; i++) {
             int startX = minX + i * chunkSize;
             int endX = (i == threadCount - 1) ? maxX : startX + chunkSize;
-            executor.execute(new RegionChecker(seed, startX, endX, minZ, maxZ, maxHeight, processedCount, resultCallback));
+            executor.execute(new RegionChecker(seed, startX, endX, minZ, maxZ, maxHeight, processedCount, resultCallback, checkGeneration));
         }
         executor.shutdown();
 
@@ -179,7 +181,7 @@ public class SearchCoords {
     }
     
     // 动态调整线程数，保持进度继续
-    private void adjustThreadCount(int newThreadCount, Consumer<String> resultCallback) {
+    private void adjustThreadCount(int newThreadCount, Consumer<String> resultCallback, boolean checkGeneration) {
         if (newThreadCount < 1) {
             return;
         }
@@ -192,6 +194,7 @@ public class SearchCoords {
         // 更新线程数
         currentThreadCount = newThreadCount;
         currentResultCallback = resultCallback;
+        currentCheckGeneration = checkGeneration;
         
         // 创建新的executor
         executor = Executors.newFixedThreadPool(newThreadCount);
@@ -203,7 +206,7 @@ public class SearchCoords {
             int startX = currentMinX + i * chunkSize;
             int endX = (i == newThreadCount - 1) ? currentMaxX : startX + chunkSize;
             executor.execute(new RegionChecker(currentSeed, startX, endX, currentMinZ, currentMaxZ, currentMaxHeight, 
-                    currentProcessedCount, currentResultCallback));
+                    currentProcessedCount, currentResultCallback, currentCheckGeneration));
         }
         executor.shutdown();
         
@@ -237,8 +240,9 @@ public class SearchCoords {
         private final ChunkRand rand;
         private final AtomicLong processedCount;
         private final Consumer<String> resultCallback;
+        private final boolean checkGeneration;
 
-        public RegionChecker(long seed, int startX, int endX, int minZ, int maxZ, double maxHeight, AtomicLong processedCount, Consumer<String> resultCallback) {
+        public RegionChecker(long seed, int startX, int endX, int minZ, int maxZ, double maxHeight, AtomicLong processedCount, Consumer<String> resultCallback, boolean checkGeneration) {
             this.seed = seed;
             this.startX = startX;
             this.endX = endX;
@@ -248,6 +252,7 @@ public class SearchCoords {
             this.rand = new ChunkRand();
             this.processedCount = processedCount;
             this.resultCallback = resultCallback;
+            this.checkGeneration = checkGeneration;
         }
 
         @Override
@@ -285,6 +290,10 @@ public class SearchCoords {
                                 // 只有当高度 <= maxHeight 时才输出
                                 if (result.height <= maxHeight) {
                                     String resultStr = result.toString();
+                                    // 如果开启了精确检查，检查女巫小屋是否可以生成
+                                    if (checkGeneration && !checkHutGeneration(seed, hutX, hutZ)) {
+                                        resultStr += " 无法生成";
+                                    }
                                     synchronized (results) {
                                         results.add(resultStr);
                                     }
@@ -327,6 +336,21 @@ public class SearchCoords {
         @Override
         public String toString() {
             return String.format("/tp %d %.2f %d", x, height, z);
+        }
+    }
+
+    // 检查女巫小屋是否可以生成（检查云杉木板）
+    public static boolean checkHutGeneration(long seed, int hutX, int hutZ) {
+        SeedChecker checker = new SeedChecker(seed, TargetState.STRUCTURES, SeedCheckerDimension.OVERWORLD);
+        try {
+            for (int y = 60; y >= -54; y--) {
+                if (checker.getBlock(hutX + 2, y, hutZ + 2) == Blocks.SPRUCE_PLANKS) {
+                    return true;
+                }
+            }
+            return false;
+        } finally {
+            checker.clearMemory();
         }
     }
 

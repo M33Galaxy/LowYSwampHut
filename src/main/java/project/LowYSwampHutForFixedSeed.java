@@ -33,6 +33,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     private JTextField maxXField;
     private JTextField minZField;
     private JTextField maxZField;
+    private JCheckBox searchCheckGenerationCheckBox;
     private JButton searchStartButton;
     private JButton searchPauseButton;
     private JButton searchStopButton;
@@ -65,6 +66,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     private JTextField listMaxXField;
     private JTextField listMinZField;
     private JTextField listMaxZField;
+    private JCheckBox listSearchCheckGenerationCheckBox;
     private JButton listSearchStartButton;
     private JButton listSearchPauseButton;
     private JButton listSearchStopButton;
@@ -275,6 +277,22 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         });
         inputPanel.add(maxZField, gbc);
 
+        // 精确检查生成情况复选框
+        gbc.gridx = 0;
+        gbc.gridy = 8;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        JLabel checkGenerationLabel = new JLabel("精确检查生成情况(略微影响效率):");
+        checkGenerationLabel.setFont(getLoadedFont());
+        inputPanel.add(checkGenerationLabel, gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        searchCheckGenerationCheckBox = new JCheckBox();
+        searchCheckGenerationCheckBox.setSelected(true); // 默认选中
+        searchCheckGenerationCheckBox.setFont(getLoadedFont());
+        inputPanel.add(searchCheckGenerationCheckBox, gbc);
+
         // 按钮区域
         JPanel buttonPanel = new JPanel(new FlowLayout());
         searchStartButton = new JButton("开始搜索");
@@ -338,7 +356,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
 
         // 右侧：结果显示
         JPanel rightPanel = new JPanel(new BorderLayout());
-        rightPanel.setBorder(BorderFactory.createTitledBorder("检查结果(真实小屋y值可能会处于输出坐标±1格以内，且不能保证每个坐标都能实际生成小屋)"));
+        rightPanel.setBorder(BorderFactory.createTitledBorder("检查结果(真实小屋y值可能会处于输出坐标±1格以内，开启精确搜索后可提示小屋是否能真实生成)"));
         searchResultArea = new JTextArea();
         searchResultArea.setEditable(false);
         searchResultArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
@@ -456,6 +474,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 maxXField.setEnabled(true);
                 minZField.setEnabled(true);
                 maxZField.setEnabled(true);
+                searchCheckGenerationCheckBox.setEnabled(true);
                 searchResultArea.setText("");
                 searchProgressBar.setValue(0);
                 searchProgressBar.setString("进度: 0/0 (0.00%)");
@@ -486,7 +505,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     }
     
     
-    // 排序搜索结果（按y值从低到高，格式为/tp x y z）
+    // 排序搜索结果（按y值从低到高，格式为/tp x y z，无法生成的排到最后）
     private void sortSearchResults() {
         String text = searchResultArea.getText().trim();
         if (text.isEmpty()) {
@@ -494,45 +513,59 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         }
         
         String[] lines = text.split("\n");
-        List<String[]> results = new ArrayList<>();
-        List<String> invalidLines = new ArrayList<>();
+        List<String[]> validResults = new ArrayList<>(); // 可生成的结果
+        List<String[]> invalidResults = new ArrayList<>(); // 无法生成的结果
+        List<String> otherLines = new ArrayList<>(); // 其他无效行
         
         for (String line : lines) {
             line = line.trim();
             if (line.isEmpty()) {
                 continue;
             }
-            // 格式：/tp x y z
+            // 格式：/tp x y z 或 /tp x y z 无法生成
             if (line.startsWith("/tp ")) {
                 String[] parts = line.substring(4).trim().split("\\s+");
                 if (parts.length >= 3) {
                     try {
                         double y = Double.parseDouble(parts[1]);
-                        results.add(new String[]{String.valueOf(y), line});
+                        boolean cannotGenerate = line.contains("无法生成");
+                        if (cannotGenerate) {
+                            invalidResults.add(new String[]{String.valueOf(y), line});
+                        } else {
+                            validResults.add(new String[]{String.valueOf(y), line});
+                        }
                     } catch (NumberFormatException e) {
-                        invalidLines.add(line);
+                        otherLines.add(line);
                     }
                 } else {
-                    invalidLines.add(line);
+                    otherLines.add(line);
                 }
             } else {
-                invalidLines.add(line);
+                otherLines.add(line);
             }
         }
         
-        // 排序：按y值从低到高
-        results.sort((a, b) -> {
+        // 排序：可生成的按y值从低到高，无法生成的也按y值从低到高
+        validResults.sort((a, b) -> {
+            double y1 = Double.parseDouble(a[0]);
+            double y2 = Double.parseDouble(b[0]);
+            return Double.compare(y1, y2);
+        });
+        invalidResults.sort((a, b) -> {
             double y1 = Double.parseDouble(a[0]);
             double y2 = Double.parseDouble(b[0]);
             return Double.compare(y1, y2);
         });
         
-        // 重新组合文本
+        // 重新组合文本：先可生成的，后无法生成的
         StringBuilder sb = new StringBuilder();
-        for (String[] result : results) {
+        for (String[] result : validResults) {
             sb.append(result[1]).append("\n");
         }
-        for (String invalid : invalidLines) {
+        for (String[] result : invalidResults) {
+            sb.append(result[1]).append("\n");
+        }
+        for (String invalid : otherLines) {
             sb.append(invalid).append("\n");
         }
         
@@ -592,8 +625,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                     int minZ = Integer.parseInt(minZField.getText().trim());
                     int maxZ = Integer.parseInt(maxZField.getText().trim());
                     
+                    boolean checkGeneration = searchCheckGenerationCheckBox.isSelected();
                     searcher.startSearch(seed, threadCount, minX, maxX, minZ, maxZ, maxHeight, 
-                            this::updateSearchProgress, this::addSearchResult);
+                            this::updateSearchProgress, this::addSearchResult, checkGeneration);
                     
                     lastSearchThreadCount = threadCount;
                     searchPauseButton.setText("暂停");
@@ -803,6 +837,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             maxXField.setEnabled(false);
             minZField.setEnabled(false);
             maxZField.setEnabled(false);
+            searchCheckGenerationCheckBox.setEnabled(false);
             searchResultArea.setText("");
             searchProgressBar.setValue(0);
             searchProgressBar.setString("进度: 0/0 (0.00%)");
@@ -814,7 +849,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             MCVersion mcVersion = getMCVersion(selectedVersion != null ? selectedVersion : "1.21.1");
 
             searcher = new SearchCoords(mcVersion);
-            searcher.startSearch(seed, threadCount, minX, maxX, minZ, maxZ, maxHeight, this::updateSearchProgress, this::addSearchResult);
+            boolean checkGeneration = searchCheckGenerationCheckBox.isSelected();
+            searcher.startSearch(seed, threadCount, minX, maxX, minZ, maxZ, maxHeight, this::updateSearchProgress, this::addSearchResult, checkGeneration);
 
         } catch (NumberFormatException e) {
             JOptionPane.showMessageDialog(this, "请输入有效的数字", "错误", JOptionPane.ERROR_MESSAGE);
@@ -860,6 +896,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         maxXField.setEnabled(true);
         minZField.setEnabled(true);
         maxZField.setEnabled(true);
+        searchCheckGenerationCheckBox.setEnabled(true);
         searchRemainingTimeLabel.setText("剩余时间: 已停止");
     }
 
@@ -1029,6 +1066,22 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         });
         inputPanel.add(listMaxZField, gbc);
 
+        // 精确检查生成情况复选框
+        gbc.gridx = 0;
+        gbc.gridy = 8;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        JLabel listCheckGenerationLabel = new JLabel("精确检查生成情况(略微影响效率):");
+        listCheckGenerationLabel.setFont(getLoadedFont());
+        inputPanel.add(listCheckGenerationLabel, gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        listSearchCheckGenerationCheckBox = new JCheckBox();
+        listSearchCheckGenerationCheckBox.setSelected(true); // 默认选中
+        listSearchCheckGenerationCheckBox.setFont(getLoadedFont());
+        inputPanel.add(listSearchCheckGenerationCheckBox, gbc);
+
         // 按钮区域
         JPanel buttonPanel = new JPanel(new FlowLayout());
         listSearchStartButton = new JButton("开始搜索");
@@ -1092,7 +1145,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
 
         // 右侧：结果显示
         JPanel rightPanel = new JPanel(new BorderLayout());
-        rightPanel.setBorder(BorderFactory.createTitledBorder("检查结果(真实小屋y值可能会处于输出坐标±1格以内，且不能保证每个坐标都能实际生成小屋)"));
+        rightPanel.setBorder(BorderFactory.createTitledBorder("检查结果(真实小屋y值可能会处于输出坐标±1格以内，开启精确搜索后可提示小屋是否能真实生成)"));
         listSearchResultArea = new JTextArea();
         listSearchResultArea.setEditable(false);
         listSearchResultArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
@@ -1170,6 +1223,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 maxXField.setEnabled(true);
                 minZField.setEnabled(true);
                 maxZField.setEnabled(true);
+                searchCheckGenerationCheckBox.setEnabled(true);
                 // 不再弹框，只在进度条中显示完成
                 searchProgressBar.setString(String.format("进度: %d/%d (100.00%%) - 完成", info.processed, info.total));
                 searchRemainingTimeLabel.setText("剩余时间: 已完成");
@@ -1395,6 +1449,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 listMaxXField.setEnabled(true);
                 listMinZField.setEnabled(true);
                 listMaxZField.setEnabled(true);
+                listSearchCheckGenerationCheckBox.setEnabled(true);
                 listSearchResultArea.setText("");
                 listSearchProgressBar.setValue(0);
                 listSearchProgressBar.setString("进度: 0/0 (0.00%)");
@@ -1677,6 +1732,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             listMaxXField.setEnabled(false);
             listMinZField.setEnabled(false);
             listMaxZField.setEnabled(false);
+            listSearchCheckGenerationCheckBox.setEnabled(false);
             listSearchResultArea.setText("");
             listSearchElapsedTimeLabel.setText("已过时间: 0天 0时 0分 0秒");
             listSearchRemainingTimeLabel.setText("剩余时间: 计算中...");
@@ -1716,8 +1772,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                     };
                     
                     // 检查当前种子对应区域有无满足条件的女巫小屋
+                    boolean checkGeneration = listSearchCheckGenerationCheckBox.isSelected();
                     listSearcher.startSearch(seed, finalThreadCount, minX, maxX, minZ, maxZ, maxHeight, 
-                            seedProgressCallback, seedResultCallback);
+                            seedProgressCallback, seedResultCallback, checkGeneration);
                     
                     // 等待当前种子搜索完成
                     while (listSearcher.isRunning() && isListSearchRunning) {
@@ -1793,6 +1850,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                     listMaxXField.setEnabled(true);
                     listMinZField.setEnabled(true);
                     listMaxZField.setEnabled(true);
+                    listSearchCheckGenerationCheckBox.setEnabled(true);
                     listSearchProgressBar.setValue((int) totalSeeds);
                     listSearchProgressBar.setString(String.format("进度: %d/%d (100.00%%) - 完成", totalSeeds, totalSeeds));
                     listSearchElapsedTimeLabel.setText("已过时间: " + formatTime(finalElapsedMs));
@@ -1844,6 +1902,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         listMaxXField.setEnabled(true);
         listMinZField.setEnabled(true);
         listMaxZField.setEnabled(true);
+        listSearchCheckGenerationCheckBox.setEnabled(true);
         listSearchRemainingTimeLabel.setText("剩余时间: 已停止");
     }
 
@@ -1905,12 +1964,14 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         final double y;
         final int z;
         final String originalLine;
+        final boolean canGenerate; // 是否可以生成
         
         Coordinate(int x, double y, int z, String originalLine) {
             this.x = x;
             this.y = y;
             this.z = z;
             this.originalLine = originalLine;
+            this.canGenerate = !originalLine.contains("无法生成");
         }
         
         // 计算到原点的距离的平方（x² + z²），用于排序
@@ -1919,29 +1980,55 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         }
     }
     
-    // 按最低y排序
+    // 按最低y排序（如果所有小屋都无法生成则排到最后，否则按可生成的最低y排序）
     private void sortListByLowestY() {
         Map<Long, List<Coordinate>> parsedResults = parseListResults();
         if (parsedResults.isEmpty()) {
             return;
         }
         
-        // 创建种子和最低y值的列表
-        List<Map.Entry<Long, Double>> seedYList = new ArrayList<>();
+        // 创建种子和最低y值的列表，区分可生成和不可生成
+        List<Map.Entry<Long, Double>> validSeedYList = new ArrayList<>(); // 有可生成小屋的种子
+        List<Map.Entry<Long, Double>> invalidSeedYList = new ArrayList<>(); // 所有小屋都无法生成的种子
+        
         for (Map.Entry<Long, List<Coordinate>> entry : parsedResults.entrySet()) {
-            double minY = entry.getValue().stream()
-                    .mapToDouble(c -> c.y)
-                    .min()
-                    .orElse(Double.MAX_VALUE);
-            seedYList.add(new java.util.AbstractMap.SimpleEntry<>(entry.getKey(), minY));
+            List<Coordinate> coords = entry.getValue();
+            // 检查是否有可生成的小屋
+            boolean hasValid = coords.stream().anyMatch(c -> c.canGenerate);
+            
+            if (hasValid) {
+                // 如果有可生成的小屋，取可生成小屋中的最低y
+                double minY = coords.stream()
+                        .filter(c -> c.canGenerate)
+                        .mapToDouble(c -> c.y)
+                        .min()
+                        .orElse(Double.MAX_VALUE);
+                validSeedYList.add(new java.util.AbstractMap.SimpleEntry<>(entry.getKey(), minY));
+            } else {
+                // 如果所有小屋都无法生成，取所有小屋中的最低y（用于在无法生成的种子中排序）
+                double minY = coords.stream()
+                        .mapToDouble(c -> c.y)
+                        .min()
+                        .orElse(Double.MAX_VALUE);
+                invalidSeedYList.add(new java.util.AbstractMap.SimpleEntry<>(entry.getKey(), minY));
+            }
         }
         
         // 按最低y值排序（从低到高）
-        seedYList.sort((a, b) -> Double.compare(a.getValue(), b.getValue()));
+        validSeedYList.sort((a, b) -> Double.compare(a.getValue(), b.getValue()));
+        invalidSeedYList.sort((a, b) -> Double.compare(a.getValue(), b.getValue()));
         
-        // 重新构建结果文本
+        // 重新构建结果文本：先可生成的种子，后无法生成的种子
         StringBuilder sb = new StringBuilder();
-        for (Map.Entry<Long, Double> entry : seedYList) {
+        for (Map.Entry<Long, Double> entry : validSeedYList) {
+            Long seed = entry.getKey();
+            List<Coordinate> coords = parsedResults.get(seed);
+            sb.append(seed).append("\n");
+            for (Coordinate coord : coords) {
+                sb.append(coord.originalLine).append("\n");
+            }
+        }
+        for (Map.Entry<Long, Double> entry : invalidSeedYList) {
             Long seed = entry.getKey();
             List<Coordinate> coords = parsedResults.get(seed);
             sb.append(seed).append("\n");
@@ -1953,30 +2040,55 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         listSearchResultArea.setText(sb.toString());
     }
     
-    // 按距离原点由近到远排序
+    // 按距离原点由近到远排序（如果所有小屋都无法生成则排到最后，否则按可生成的最近距离排序）
     private void sortListByDistance() {
         Map<Long, List<Coordinate>> parsedResults = parseListResults();
         if (parsedResults.isEmpty()) {
             return;
         }
         
-        // 创建种子和最近距离的列表（如果同一种子有多个坐标，取最近的那个）
-        // 使用 x² + z² 作为排序依据
-        List<Map.Entry<Long, Double>> seedDistanceList = new ArrayList<>();
+        // 创建种子和最近距离的列表，区分可生成和不可生成
+        List<Map.Entry<Long, Double>> validSeedDistanceList = new ArrayList<>(); // 有可生成小屋的种子
+        List<Map.Entry<Long, Double>> invalidSeedDistanceList = new ArrayList<>(); // 所有小屋都无法生成的种子
+        
         for (Map.Entry<Long, List<Coordinate>> entry : parsedResults.entrySet()) {
-            double minDistanceSquared = entry.getValue().stream()
-                    .mapToDouble(Coordinate::distanceSquared)
-                    .min()
-                    .orElse(0.0);
-            seedDistanceList.add(new java.util.AbstractMap.SimpleEntry<>(entry.getKey(), minDistanceSquared));
+            List<Coordinate> coords = entry.getValue();
+            // 检查是否有可生成的小屋
+            boolean hasValid = coords.stream().anyMatch(c -> c.canGenerate);
+            
+            if (hasValid) {
+                // 如果有可生成的小屋，取可生成小屋中的最近距离
+                double minDistanceSquared = coords.stream()
+                        .filter(c -> c.canGenerate)
+                        .mapToDouble(Coordinate::distanceSquared)
+                        .min()
+                        .orElse(0.0);
+                validSeedDistanceList.add(new java.util.AbstractMap.SimpleEntry<>(entry.getKey(), minDistanceSquared));
+            } else {
+                // 如果所有小屋都无法生成，取所有小屋中的最近距离（用于在无法生成的种子中排序）
+                double minDistanceSquared = coords.stream()
+                        .mapToDouble(Coordinate::distanceSquared)
+                        .min()
+                        .orElse(0.0);
+                invalidSeedDistanceList.add(new java.util.AbstractMap.SimpleEntry<>(entry.getKey(), minDistanceSquared));
+            }
         }
         
         // 按距离排序（从近到远，即从小到大）
-        seedDistanceList.sort((a, b) -> Double.compare(a.getValue(), b.getValue()));
+        validSeedDistanceList.sort((a, b) -> Double.compare(a.getValue(), b.getValue()));
+        invalidSeedDistanceList.sort((a, b) -> Double.compare(a.getValue(), b.getValue()));
         
-        // 重新构建结果文本
+        // 重新构建结果文本：先可生成的种子，后无法生成的种子
         StringBuilder sb = new StringBuilder();
-        for (Map.Entry<Long, Double> entry : seedDistanceList) {
+        for (Map.Entry<Long, Double> entry : validSeedDistanceList) {
+            Long seed = entry.getKey();
+            List<Coordinate> coords = parsedResults.get(seed);
+            sb.append(seed).append("\n");
+            for (Coordinate coord : coords) {
+                sb.append(coord.originalLine).append("\n");
+            }
+        }
+        for (Map.Entry<Long, Double> entry : invalidSeedDistanceList) {
             Long seed = entry.getKey();
             List<Coordinate> coords = parsedResults.get(seed);
             sb.append(seed).append("\n");

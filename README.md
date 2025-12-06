@@ -72,7 +72,13 @@ The top-left part is the **Parameter Settings** area, which includes:
 
 **MinX/MaxX/MinZ/MaxZ (x512)**：搜索女巫小屋的坐标范围。默认值为世界边界（-58594 到 58593）。有效范围为 -30,000,000 到 30,000,000。
 
-The top-right part shows the **Search Results**. The results are displayed in the format `/tp x y z`, where y is the Y-coordinate of the Swamp Hut. **Note: The actual hut Y-coordinate may be within ±1 block of the output coordinate, and not every coordinate can guarantee the actual generation of a hut.**
+**Precise Generation Check (Slightly Affects Efficiency)**: When enabled, the program will check whether the Swamp Hut can actually generate at each coordinate. Coordinates that cannot generate will be marked with "无法生成" (cannot generate). **Note: Enabling this option will slightly reduce search efficiency, but it helps filter out coordinates that cannot actually generate huts.**
+
+**精确检查生成情况(略微影响效率)**：启用后，程序将检查每个坐标是否能够实际生成女巫小屋。无法生成的坐标将被标记为"无法生成"。**注意：启用此选项会略微降低搜索效率，但有助于筛选出无法实际生成小屋的坐标。**
+
+The top-right part shows the **Search Results**. The results are displayed in the format `/tp x y z`, where y is the Y-coordinate of the Swamp Hut. **Note: The actual hut Y-coordinate may be within ±1 block of the output coordinate. When precise generation check is enabled, the program can indicate whether the hut can actually generate.**
+
+右上角部分显示**检查结果**。结果以 `/tp x y z` 格式显示，其中 y 是女巫小屋的 Y 坐标。**注意：真实小屋 y 值可能会处于输出坐标 ±1 格以内。开启精确搜索后可提示小屋是否能真实生成。**
 
 右上角部分显示**检查结果**。结果以 `/tp x y z` 格式显示，其中 y 是女巫小屋的 Y 坐标。**注意：真实小屋 y 值可能会处于输出坐标 ±1 格以内，且不能保证每个坐标都能实际生成小屋。**
 
@@ -84,9 +90,9 @@ At the bottom, you can see the **Progress Bar**, which shows the search progress
 
 **导出**：将所有搜索结果导出到文本文件。
 
-**Sort**: Sort the results by Y-coordinate from low to high.
+**Sort**: Sort the results by Y-coordinate from low to high. If precise generation check is enabled, coordinates that cannot generate will be sorted to the end.
 
-**排序**：按 Y 坐标从低到高排序结果。
+**排序**：按 Y 坐标从低到高排序结果。如果启用了精确检查生成情况，无法生成的坐标将被排到最后。
 
 **Reset Search Area to World Boundary**: Reset the coordinate range to the default world boundary values.
 
@@ -118,13 +124,13 @@ The search will process each seed in the list sequentially. The progress bar sho
 
 **导出种子列表**：仅导出种子列表（不含 `/tp` 坐标）到文本文件。这对于筛选具有低 Y 坐标女巫小屋的种子很有用。
 
-**Sort by Lowest Y**: Sort the results by the lowest Y-coordinate of each seed.
+**Sort by Lowest Y**: Sort the results by the lowest Y-coordinate of each seed. If precise generation check is enabled, seeds with all huts marked as "cannot generate" will be sorted to the end. Seeds with some generatable huts will be sorted by the lowest Y-coordinate of the generatable huts.
 
-**按最低y排序**：按每个种子的最低 Y 坐标排序结果。
+**按最低y排序**：按每个种子的最低 Y 坐标排序结果。如果启用了精确检查生成情况，所有小屋都被标记为"无法生成"的种子将被排到最后。部分小屋可生成的种子将按可生成小屋中的最低 Y 坐标排序。
 
-**Sort by Distance**: Sort the results by the distance from the origin (0, 0).
+**Sort by Distance**: Sort the results by the distance from the origin (0, 0). If precise generation check is enabled, seeds with all huts marked as "cannot generate" will be sorted to the end. Seeds with some generatable huts will be sorted by the nearest distance of the generatable huts.
 
-**按距离排序**：按距离原点 (0, 0) 的距离排序结果。
+**按距离排序**：按距离原点 (0, 0) 的距离排序结果。如果启用了精确检查生成情况，所有小屋都被标记为"无法生成"的种子将被排到最后。部分小屋可生成的种子将按可生成小屋中的最近距离排序。
 
 **Reset Search Area to Default**: Reset the coordinate range to the default values (-128 to 128).
 
@@ -175,12 +181,14 @@ The search will process each seed in the list sequentially. The progress bar sho
 ## Notes / 注意事项
 
 - The search results show the theoretical Y-coordinate of the Swamp Hut. The actual Y-coordinate may vary by ±1 block.
-- Not every coordinate in the results can guarantee the actual generation of a Swamp Hut in the game.
+- Not every coordinate in the results can guarantee the actual generation of a Swamp Hut in the game. When "Precise Generation Check" is enabled, coordinates that cannot generate will be marked with "无法生成" (cannot generate).
+- Enabling "Precise Generation Check" will slightly reduce search efficiency, as it requires additional checks for each coordinate. If you prioritize search speed, you can disable this option.
 - For large coordinate ranges, the search may take a long time. It is recommended to use appropriate thread counts based on your computer's performance.
 - When searching from a seed list, it is not recommended to load a list with more than 10 million seeds.
 
 - 搜索结果显示的是女巫小屋的理论 Y 坐标。实际 Y 坐标可能会有 ±1 格的偏差。
-- 结果中的每个坐标不能保证在游戏中实际生成女巫小屋。
+- 结果中的每个坐标不能保证在游戏中实际生成女巫小屋。当启用"精确检查生成情况"时，无法生成的坐标将被标记为"无法生成"。
+- 启用"精确检查生成情况"会略微降低搜索效率，因为它需要对每个坐标进行额外检查。如果您优先考虑搜索速度，可以禁用此选项。
 - 对于大范围的坐标搜索，可能需要较长时间。建议根据您的计算机性能使用适当的线程数。
 - 从种子列表搜索时，不建议加载超过 1000 万种子的列表。
 
