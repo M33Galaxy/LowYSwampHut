@@ -78,6 +78,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     private JProgressBar listSearchProgressBar;
     private JLabel listSearchElapsedTimeLabel;
     private JLabel listSearchRemainingTimeLabel;
+    private JLabel listSearchCurrentSeedProgressLabel;
     private JTextArea listSearchResultArea;
     private SearchCoords listSearcher;
     private volatile boolean isListSearchRunning = false;
@@ -1128,6 +1129,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         listSearchElapsedTimeLabel = new JLabel("已过时间: 0天 0时 0分 0秒");
         progressPanel.add(listSearchElapsedTimeLabel, pgc);
 
+        pgc.gridy = 2;
+        listSearchCurrentSeedProgressLabel = new JLabel("当前种子: -/-，进度: 0.00%");
+        listSearchCurrentSeedProgressLabel.setFont(getLoadedFont());
+        progressPanel.add(listSearchCurrentSeedProgressLabel, pgc);
+
         pgc.gridy = 3;
         listSearchRemainingTimeLabel = new JLabel("剩余时间: 计算中...");
         progressPanel.add(listSearchRemainingTimeLabel, pgc);
@@ -1450,10 +1456,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 listMinZField.setEnabled(true);
                 listMaxZField.setEnabled(true);
                 listSearchCheckGenerationCheckBox.setEnabled(true);
-                listSearchResultArea.setText("");
-                listSearchProgressBar.setValue(0);
-                listSearchProgressBar.setString("进度: 0/0 (0.00%)");
-                listSearchRemainingTimeLabel.setText("剩余时间: 已重置（参数已更改）");
+            listSearchResultArea.setText("");
+            listSearchProgressBar.setValue(0);
+            listSearchProgressBar.setString("总进度: 0/0 (0.00%)");
+            listSearchCurrentSeedProgressLabel.setText("当前种子: -/-，进度: 0.00%");
+            listSearchRemainingTimeLabel.setText("剩余时间: 已重置（参数已更改）");
             }
         } catch (NumberFormatException e) {
             // 忽略无效输入
@@ -1585,7 +1592,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 SwingUtilities.invokeLater(() -> {
                     listSearchProgressBar.setMaximum((int) totalSeeds);
                     listSearchProgressBar.setValue(0);
-                    listSearchProgressBar.setString(String.format("进度: 0/%d (0.00%%)", totalSeeds));
+                    listSearchProgressBar.setString(String.format("总进度: 0/%d (0.00%%)", totalSeeds));
+                    listSearchCurrentSeedProgressLabel.setText("当前种子: -/-，进度: 0.00%");
                 });
             } catch (IOException e) {
                 JOptionPane.showMessageDialog(this, "读取种子文件失败: " + e.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
@@ -1734,6 +1742,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             listMaxZField.setEnabled(false);
             listSearchCheckGenerationCheckBox.setEnabled(false);
             listSearchResultArea.setText("");
+            listSearchProgressBar.setValue(0);
+            listSearchProgressBar.setString("总进度: 0/0 (0.00%)");
+            listSearchCurrentSeedProgressLabel.setText("当前种子: -/-，进度: 0.00%");
             listSearchElapsedTimeLabel.setText("已过时间: 0天 0时 0分 0秒");
             listSearchRemainingTimeLabel.setText("剩余时间: 计算中...");
             
@@ -1751,10 +1762,13 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             new Thread(() -> {
                 final int[] processedSeedsRef = {0};
                 
-                for (long seed : seeds) {
+                for (int seedIndex = 0; seedIndex < seeds.size(); seedIndex++) {
                     if (!isListSearchRunning) {
                         break;
                     }
+                    
+                    final long seed = seeds.get(seedIndex);
+                    final int currentSeedIndex = seedIndex + 1; // 当前种子序号（从1开始）
                     
                     seedResults.put(seed, new ArrayList<>());
                     
@@ -1766,9 +1780,16 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                         seedResults.get(currentSeed).add(result);
                     };
                     
-                    // 创建进度回调，但不更新总体进度（只用于单个种子的内部进度）
+                    // 创建进度回调，更新当前种子的进度
                     Consumer<SearchCoords.ProgressInfo> seedProgressCallback = info -> {
-                        // 单个种子的进度不更新总体进度条，总体进度条只显示种子数
+                        SwingUtilities.invokeLater(() -> {
+                            if (isListSearchRunning) {
+                                listSearchCurrentSeedProgressLabel.setText(
+                                    String.format("当前种子: %d/%d，进度: %d/%d (%.2f%%)", 
+                                        currentSeedIndex, totalSeeds, info.processed, info.total, info.percentage)
+                                );
+                            }
+                        });
                     };
                     
                     // 检查当前种子对应区域有无满足条件的女巫小屋
@@ -1808,7 +1829,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                     
                     SwingUtilities.invokeLater(() -> {
                         listSearchProgressBar.setValue(completedSeeds);
-                        listSearchProgressBar.setString(String.format("进度: %d/%d (%.2f%%)", completedSeeds, totalSeeds, percentage));
+                        listSearchProgressBar.setString(String.format("总进度: %d/%d (%.2f%%)", completedSeeds, totalSeeds, percentage));
                         if (!isListSearchPaused) {
                             listSearchElapsedTimeLabel.setText("已过时间: " + formatTime(elapsedMs));
                             if (remainingMs > 0) {
@@ -1852,7 +1873,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                     listMaxZField.setEnabled(true);
                     listSearchCheckGenerationCheckBox.setEnabled(true);
                     listSearchProgressBar.setValue((int) totalSeeds);
-                    listSearchProgressBar.setString(String.format("进度: %d/%d (100.00%%) - 完成", totalSeeds, totalSeeds));
+                    listSearchProgressBar.setString(String.format("总进度: %d/%d (100.00%%) - 完成", totalSeeds, totalSeeds));
+                    listSearchCurrentSeedProgressLabel.setText("当前种子: -/-，进度: 100.00%");
                     listSearchElapsedTimeLabel.setText("已过时间: " + formatTime(finalElapsedMs));
                     listSearchRemainingTimeLabel.setText("剩余时间: 已完成");
                 });
@@ -1903,6 +1925,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         listMinZField.setEnabled(true);
         listMaxZField.setEnabled(true);
         listSearchCheckGenerationCheckBox.setEnabled(true);
+        listSearchCurrentSeedProgressLabel.setText("当前种子: -/-，进度: 0.00%");
         listSearchRemainingTimeLabel.setText("剩余时间: 已停止");
     }
 
