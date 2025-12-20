@@ -292,7 +292,7 @@ public class SearchCoords {
                                     String resultStr = result.toString();
                                     // 如果开启了精确检查，检查女巫小屋是否可以生成
                                     if (checkGeneration && !checkHutGeneration(seed, hutX, hutZ)) {
-                                        resultStr += " 无法生成";
+                                        resultStr += " cannot spawn";
                                     }
                                     synchronized (results) {
                                         results.add(resultStr);

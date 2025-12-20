@@ -78,6 +78,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     private JProgressBar listSearchProgressBar;
     private JLabel listSearchElapsedTimeLabel;
     private JLabel listSearchRemainingTimeLabel;
+    private JLabel listSearchCurrentSeedProgressLabel;
     private JTextArea listSearchResultArea;
     private SearchCoords listSearcher;
     private volatile boolean isListSearchRunning = false;
@@ -522,14 +523,14 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             if (line.isEmpty()) {
                 continue;
             }
-            // Format: /tp x y z or /tp x y z cannot generate
+            // Format: /tp x y z or /tp x y z cannot spawn
             if (line.startsWith("/tp ")) {
                 String[] parts = line.substring(4).trim().split("\\s+");
                 if (parts.length >= 3) {
                     try {
                         double y = Double.parseDouble(parts[1]);
-                        boolean cannotGenerate = line.contains("cannot generate");
-                        if (cannotGenerate) {
+                        boolean cannotSpawn = line.contains("cannot spawn");
+                        if (cannotSpawn) {
                             invalidResults.add(new String[]{String.valueOf(y), line});
                         } else {
                             validResults.add(new String[]{String.valueOf(y), line});
@@ -1128,6 +1129,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         listSearchElapsedTimeLabel = new JLabel("Elapsed Time: 0d 0h 0m 0s");
         progressPanel.add(listSearchElapsedTimeLabel, pgc);
 
+        pgc.gridy = 2;
+        listSearchCurrentSeedProgressLabel = new JLabel("Current Seed: -/-, Progress: 0.00%");
+        listSearchCurrentSeedProgressLabel.setFont(getLoadedFont());
+        progressPanel.add(listSearchCurrentSeedProgressLabel, pgc);
+
         pgc.gridy = 3;
         listSearchRemainingTimeLabel = new JLabel("Remaining Time: Calculating...");
         progressPanel.add(listSearchRemainingTimeLabel, pgc);
@@ -1453,6 +1459,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 listSearchResultArea.setText("");
                 listSearchProgressBar.setValue(0);
                 listSearchProgressBar.setString("Progress: 0/0 (0.00%)");
+                listSearchCurrentSeedProgressLabel.setText("Current Seed: -/-, Progress: 0.00%");
                 listSearchRemainingTimeLabel.setText("Remaining Time: Reset (Parameters Changed)");
             }
         } catch (NumberFormatException e) {
@@ -1586,6 +1593,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                     listSearchProgressBar.setMaximum((int) totalSeeds);
                     listSearchProgressBar.setValue(0);
                     listSearchProgressBar.setString(String.format("Progress: 0/%d (0.00%%)", totalSeeds));
+                    listSearchCurrentSeedProgressLabel.setText("Current Seed: -/-, Progress: 0.00%");
                 });
             } catch (IOException e) {
                 JOptionPane.showMessageDialog(this, "Failed to read seed file: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
@@ -1734,6 +1742,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             listMaxZField.setEnabled(false);
             listSearchCheckGenerationCheckBox.setEnabled(false);
             listSearchResultArea.setText("");
+            listSearchProgressBar.setValue(0);
+            listSearchProgressBar.setString("Progress: 0/0 (0.00%)");
+            listSearchCurrentSeedProgressLabel.setText("Current Seed: -/-, Progress: 0.00%");
             listSearchElapsedTimeLabel.setText("Elapsed Time: 0d 0h 0m 0s");
             listSearchRemainingTimeLabel.setText("Remaining Time: Calculating...");
             
@@ -1751,11 +1762,14 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             new Thread(() -> {
                 final int[] processedSeedsRef = {0};
                 
-                for (long seed : seeds) {
+                for (int seedIndex = 0; seedIndex < seeds.size(); seedIndex++) {
                     if (!isListSearchRunning) {
                         break;
                     }
                     
+                    final long seed = seeds.get(seedIndex);
+                    final int currentSeedIndex = seedIndex + 1; // Current sequence (start from 1)
+
                     seedResults.put(seed, new ArrayList<>());
                     
                     listSearcher = new SearchCoords(mcVersion);
@@ -1765,10 +1779,17 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                     Consumer<String> seedResultCallback = result -> {
                         seedResults.get(currentSeed).add(result);
                     };
-                    
-                    // Create progress callback, but don't update overall progress (only for individual seed internal progress)
+
+                    // Create progress callback, updating current seed progress
                     Consumer<SearchCoords.ProgressInfo> seedProgressCallback = info -> {
-                        // Individual seed progress doesn't update overall progress bar, overall progress bar only shows seed count
+                        SwingUtilities.invokeLater(() -> {
+                            if (isListSearchRunning) {
+                                listSearchCurrentSeedProgressLabel.setText(
+                                    String.format("Current Seed: %d/%d, Progress: %d/%d (%.2f%%)",
+                                        currentSeedIndex, totalSeeds, info.processed, info.total, info.percentage)
+                                );
+                            }
+                        });
                     };
                     
                     // Check if current seed's corresponding area has witch huts meeting conditions
@@ -1853,6 +1874,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                     listSearchCheckGenerationCheckBox.setEnabled(true);
                     listSearchProgressBar.setValue((int) totalSeeds);
                     listSearchProgressBar.setString(String.format("Progress: %d/%d (100.00%%) - Complete", totalSeeds, totalSeeds));
+                    listSearchCurrentSeedProgressLabel.setText("Current Seed: -/-, Progress: 100.00%");
                     listSearchElapsedTimeLabel.setText("Elapsed Time: " + formatTime(finalElapsedMs));
                     listSearchRemainingTimeLabel.setText("Remaining Time: Completed");
                 });
@@ -1903,6 +1925,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         listMinZField.setEnabled(true);
         listMaxZField.setEnabled(true);
         listSearchCheckGenerationCheckBox.setEnabled(true);
+        listSearchCurrentSeedProgressLabel.setText("Current Seed: -/-, Progress: 0.00%");
         listSearchRemainingTimeLabel.setText("Remaining Time: Stopped");
     }
 
@@ -1964,14 +1987,14 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         final double y;
         final int z;
         final String originalLine;
-        final boolean canGenerate; // Whether it can generate
+        final boolean canSpawn; // Whether it can spawn
         
         Coordinate(int x, double y, int z, String originalLine) {
             this.x = x;
             this.y = y;
             this.z = z;
             this.originalLine = originalLine;
-            this.canGenerate = !originalLine.contains("cannot generate");
+            this.canSpawn = !originalLine.contains("cannot spawn");
         }
         
         // Calculate squared distance to origin (x² + z²), used for sorting
@@ -1980,7 +2003,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         }
     }
     
-    // Sort by lowest y (if all huts cannot generate, put at end, otherwise sort by lowest generatable y)
+    // Sort by lowest y (if all huts cannot spawn, put at end, otherwise sort by lowest generatable y)
     private void sortListByLowestY() {
         Map<Long, List<Coordinate>> parsedResults = parseListResults();
         if (parsedResults.isEmpty()) {
@@ -1989,23 +2012,23 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         
         // Create list of seeds and lowest y values, distinguish generatable and non-generatable
         List<Map.Entry<Long, Double>> validSeedYList = new ArrayList<>(); // Seeds with generatable huts
-        List<Map.Entry<Long, Double>> invalidSeedYList = new ArrayList<>(); // Seeds where all huts cannot generate
+        List<Map.Entry<Long, Double>> invalidSeedYList = new ArrayList<>(); // Seeds where all huts cannot spawn
         
         for (Map.Entry<Long, List<Coordinate>> entry : parsedResults.entrySet()) {
             List<Coordinate> coords = entry.getValue();
             // Check if there are generatable huts
-            boolean hasValid = coords.stream().anyMatch(c -> c.canGenerate);
+            boolean hasValid = coords.stream().anyMatch(c -> c.canSpawn);
             
             if (hasValid) {
                 // If there are generatable huts, take the lowest y among generatable huts
                 double minY = coords.stream()
-                        .filter(c -> c.canGenerate)
+                        .filter(c -> c.canSpawn)
                         .mapToDouble(c -> c.y)
                         .min()
                         .orElse(Double.MAX_VALUE);
                 validSeedYList.add(new java.util.AbstractMap.SimpleEntry<>(entry.getKey(), minY));
             } else {
-                // If all huts cannot generate, take the lowest y among all huts (for sorting among non-generatable seeds)
+                // If all huts cannot spawn, take the lowest y among all huts (for sorting among non-generatable seeds)
                 double minY = coords.stream()
                         .mapToDouble(c -> c.y)
                         .min()
@@ -2040,7 +2063,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         listSearchResultArea.setText(sb.toString());
     }
     
-    // Sort by distance from origin (near to far) (if all huts cannot generate, put at end, otherwise sort by nearest generatable distance)
+    // Sort by distance from origin (near to far) (if all huts cannot spawn, put at end, otherwise sort by nearest generatable distance)
     private void sortListByDistance() {
         Map<Long, List<Coordinate>> parsedResults = parseListResults();
         if (parsedResults.isEmpty()) {
@@ -2049,23 +2072,23 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         
         // Create list of seeds and nearest distances, distinguish generatable and non-generatable
         List<Map.Entry<Long, Double>> validSeedDistanceList = new ArrayList<>(); // Seeds with generatable huts
-        List<Map.Entry<Long, Double>> invalidSeedDistanceList = new ArrayList<>(); // Seeds where all huts cannot generate
+        List<Map.Entry<Long, Double>> invalidSeedDistanceList = new ArrayList<>(); // Seeds where all huts cannot spawn
         
         for (Map.Entry<Long, List<Coordinate>> entry : parsedResults.entrySet()) {
             List<Coordinate> coords = entry.getValue();
             // Check if there are generatable huts
-            boolean hasValid = coords.stream().anyMatch(c -> c.canGenerate);
+            boolean hasValid = coords.stream().anyMatch(c -> c.canSpawn);
             
             if (hasValid) {
                 // If there are generatable huts, take the nearest distance among generatable huts
                 double minDistanceSquared = coords.stream()
-                        .filter(c -> c.canGenerate)
+                        .filter(c -> c.canSpawn)
                         .mapToDouble(Coordinate::distanceSquared)
                         .min()
                         .orElse(0.0);
                 validSeedDistanceList.add(new java.util.AbstractMap.SimpleEntry<>(entry.getKey(), minDistanceSquared));
             } else {
-                // If all huts cannot generate, take the nearest distance among all huts (for sorting among non-generatable seeds)
+                // If all huts cannot spawn, take the nearest distance among all huts (for sorting among non-generatable seeds)
                 double minDistanceSquared = coords.stream()
                         .mapToDouble(Coordinate::distanceSquared)
                         .min()
