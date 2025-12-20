@@ -95,7 +95,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     private Font loadedFont = null;
 
     public LowYSwampHutForFixedSeed() {
-        setTitle("Minecraft Java版低y女巫小屋搜素工具");
+        setTitle("Minecraft Java版低y女巫小屋搜索工具");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLayout(new BorderLayout());
         
