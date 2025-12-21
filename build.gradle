@@ -3,7 +3,7 @@ plugins {
     id 'com.github.johnrengelman.shadow' version '8.1.1'
 }
 group 'org.example'
-version '1.1.1'
+version '1.1.2'
 repositories {
     mavenCentral()
     gradlePluginPortal()
@@ -24,16 +24,10 @@ repositories {
 
 }
 dependencies {
-    implementation('com.seedfinding:mc_math:1.171.0')
-    implementation('com.seedfinding:mc_noise:1.171.1')
-    implementation('com.seedfinding:mc_reversal:1.171.1')
-    implementation('com.seedfinding:mc_terrain:1.171.1')
     implementation('com.seedfinding:mc_seed:1.171.2')
     implementation('com.seedfinding:mc_core:1.210.0')
-    implementation('com.seedfinding:mc_biome:1.171.1')
     implementation('com.seedfinding:mc_feature:1.171.9')
     implementation('com.github.jellejurre:seed-checker:1.2.0-1.18.1'){transitive=false}
-    implementation('com.github.profotoce59:VillageGenerator:main-SNAPSHOT'){transitive=false}
     implementation 'com.github.KalleStruik:noise-sampler:1.20.0'
 
 
@@ -54,16 +48,17 @@ shadowJar {
     mergeServiceFiles()
 }
 
-// 创建 TestCoordsUI 的可执行 JAR
-task testCoordsJar(type: com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar) {
+// 创建 LowYSwampHutForFixedSeed 的可执行 JAR
+task buildMainJar(type: com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar) {
     group = 'build'
-    description = 'Creates a fat JAR for TestCoordsUI'
-    archiveBaseName.set('TestCoords')
+    description = 'Creates a fat JAR for LowYSwampHutForFixedSeed'
+    archiveBaseName.set('buildMainJar')
     archiveClassifier.set('')
     from sourceSets.main.output
     configurations = [project.configurations.runtimeClasspath]
     manifest {
-        attributes 'Main-Class': 'project.TestCoordsUI'
+        attributes 'Main-Class': 'project.Launcher'
+        attributes 'Multi-Release': 'true'
     }
     mergeServiceFiles()
     transform(com.github.jengelman.gradle.plugins.shadow.transformers.Log4j2PluginsCacheFileTransformer)
@@ -71,13 +66,15 @@ task testCoordsJar(type: com.github.jengelman.gradle.plugins.shadow.tasks.Shadow
         paths = ['META-INF/spring.handlers', 'META-INF/spring.schemas']
         mergeStrategy = "append"
     }
+    // 注意：不要排除 META-INF/versions/**，因为 Multi-Release JAR 需要这些文件
+    exclude 'module-info.class'
 }
 
-// 创建 LowYSwampHutForFixedSeed 的可执行 JAR
-task lowYSwampHutForFixedSeedJar(type: com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar) {
+// 创建 LowYSwampHutForFixedSeedEn 的可执行 JAR
+task buildMainEnJar(type: com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar) {
     group = 'build'
-    description = 'Creates a fat JAR for LowYSwampHutForFixedSeed'
-    archiveBaseName.set('LowYSwampHutForFixedSeed')
+    description = 'Creates a fat JAR for LowYSwampHutForFixedSeedEn'
+    archiveBaseName.set('buildMainEnJar')
     archiveClassifier.set('')
     from sourceSets.main.output
     configurations = [project.configurations.runtimeClasspath]
@@ -99,5 +96,5 @@ task lowYSwampHutForFixedSeedJar(type: com.github.jengelman.gradle.plugins.shado
 task buildAllJars {
     group = 'build'
     description = 'Builds all executable JARs'
-    dependsOn testCoordsJar, lowYSwampHutForFixedSeedJar
+    dependsOn buildMainJar, buildMainEnJar
 }
