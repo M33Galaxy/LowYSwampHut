@@ -10,8 +10,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.function.Consumer;
+import java.util.Locale;
+import java.util.ResourceBundle;
+import java.text.MessageFormat;
 
 public class LowYSwampHutForFixedSeed extends JFrame {
+    // ResourceBundle for internationalization
+    private ResourceBundle messages;
     // 默认值 - 单种子搜索
     private static final int DEFAULT_MIN_X = -58594;
     private static final int DEFAULT_MAX_X = 58593;
@@ -25,6 +30,16 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     private static final int DEFAULT_THREAD_COUNT = 8;
     
     // 单种子搜索相关组件
+    private JLabel searchSeedLabel;
+    private JLabel searchThreadCountLabel;
+    private JLabel searchHeightLabel;
+    private JLabel searchVersionLabel;
+    private JLabel searchMinXLabel;
+    private JLabel searchMaxXLabel;
+    private JLabel searchMinZLabel;
+    private JLabel searchMaxZLabel;
+    private JLabel searchCheckGenerationLabel;
+    private JLabel searchLanguageLabel;
     private JTextField searchSeedField;
     private JTextField searchThreadCountField;
     private JComboBox<String> maxHeightComboBox;
@@ -34,6 +49,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     private JTextField minZField;
     private JTextField maxZField;
     private JCheckBox searchCheckGenerationCheckBox;
+    private JComboBox<String> languageComboBox;
     private JButton searchStartButton;
     private JButton searchPauseButton;
     private JButton searchStopButton;
@@ -43,7 +59,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     private JProgressBar searchProgressBar;
     private JLabel searchElapsedTimeLabel;
     private JLabel searchRemainingTimeLabel;
+    private JLabel searchCreditLabel;
+    private JPanel searchRightPanel;
     private JTextArea searchResultArea;
+    private JLabel listSearchCreditLabel;
+    private JPanel listSearchRightPanel;
     private SearchCoords searcher;
     private volatile boolean isSearchRunning = false;
     private volatile boolean isSearchPaused = false;
@@ -58,6 +78,15 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     // 从种子列表搜索相关组件
     private JButton listSearchSeedFileButton;
     private JLabel listSearchSeedFileLabel;
+    private JLabel listSearchSeedFileTitleLabel;
+    private JLabel listSearchThreadCountLabel;
+    private JLabel listSearchHeightLabel;
+    private JLabel listSearchVersionLabel;
+    private JLabel listSearchMinXLabel;
+    private JLabel listSearchMaxXLabel;
+    private JLabel listSearchMinZLabel;
+    private JLabel listSearchMaxZLabel;
+    private JLabel listSearchCheckGenerationLabel;
     private File selectedSeedFile;
     private JTextField listSearchThreadCountField;
     private JComboBox<String> listMaxHeightComboBox;
@@ -94,9 +123,32 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     
     // 加载的字体
     private Font loadedFont = null;
+    // 当前语言Locale
+    private Locale currentLocale;
 
     public LowYSwampHutForFixedSeed() {
-        setTitle("Minecraft Java版低y女巫小屋搜索工具");
+        // 初始化ResourceBundle，根据系统语言选择
+        Locale systemLocale = Locale.getDefault();
+        // 如果系统语言是中文（zh-cn、zh-hk、zh-tw），使用中文资源，否则使用英文
+        if (systemLocale.getLanguage().equals("zh")) {
+            String country = systemLocale.getCountry().toLowerCase();
+            if (country.equals("cn") || country.equals("hk") || country.equals("tw")) {
+                currentLocale = new Locale("zh", "CN");
+            } else {
+                currentLocale = new Locale("en", "US");
+            }
+        } else {
+            currentLocale = new Locale("en", "US");
+        }
+        try {
+            messages = ResourceBundle.getBundle("messages", currentLocale);
+        } catch (Exception e) {
+            // 如果加载失败，使用默认的英文
+            currentLocale = new Locale("en", "US");
+            messages = ResourceBundle.getBundle("messages", currentLocale);
+        }
+        
+        setTitle(getString("window.title"));
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLayout(new BorderLayout());
         
@@ -108,13 +160,35 @@ public class LowYSwampHutForFixedSeed extends JFrame {
 
         // 创建标签页
         JTabbedPane tabbedPane = new JTabbedPane();
-        tabbedPane.addTab("单种子搜索", createSingleSeedSearchPanel());
-        tabbedPane.addTab("从种子列表搜索", createListSearchPanel());
+        tabbedPane.addTab(getString("tab.singleSeedSearch"), createSingleSeedSearchPanel());
+        tabbedPane.addTab(getString("tab.listSearch"), createListSearchPanel());
         add(tabbedPane, BorderLayout.CENTER);
         
         pack();
-        setSize(1200, 800);
+        setSize(1350, 800);
         setLocationRelativeTo(null);
+    }
+
+    /**
+     * 获取本地化字符串
+     */
+    private String getString(String key) {
+        try {
+            return messages.getString(key);
+        } catch (Exception e) {
+            return key; // 如果找不到，返回key本身
+        }
+    }
+    
+    /**
+     * 获取格式化字符串
+     */
+    private String getString(String key, Object... args) {
+        try {
+            return MessageFormat.format(messages.getString(key), args);
+        } catch (Exception e) {
+            return key; // 如果找不到，返回key本身
+        }
     }
 
     // 创建单种子搜索面板
@@ -134,9 +208,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         // Seed 输入
         gbc.gridx = 0;
         gbc.gridy = 0;
-        JLabel seedLabel = new JLabel("种子:");
-        seedLabel.setFont(getLoadedFont());
-        inputPanel.add(seedLabel, gbc);
+        searchSeedLabel = new JLabel(getString("label.seed"));
+        searchSeedLabel.setFont(getLoadedFont());
+        inputPanel.add(searchSeedLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -144,7 +218,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         // 添加输入验证，非整数时提示
         searchSeedField.addFocusListener(new java.awt.event.FocusAdapter() {
             public void focusLost(java.awt.event.FocusEvent e) {
-                validateIntegerInput(searchSeedField, "种子");
+                validateIntegerInput(searchSeedField, getString("label.seed").replace(":", ""));
             }
         });
         inputPanel.add(searchSeedField, gbc);
@@ -154,9 +228,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.gridy = 1;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        JLabel threadLabel = new JLabel("线程数:");
-        threadLabel.setFont(getLoadedFont());
-        inputPanel.add(threadLabel, gbc);
+        searchThreadCountLabel = new JLabel(getString("label.threadCount"));
+        searchThreadCountLabel.setFont(getLoadedFont());
+        inputPanel.add(searchThreadCountLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -164,7 +238,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         // 添加输入验证，非整数时提示
         searchThreadCountField.addFocusListener(new java.awt.event.FocusAdapter() {
             public void focusLost(java.awt.event.FocusEvent e) {
-                validateIntegerInput(searchThreadCountField, "线程数");
+                validateIntegerInput(searchThreadCountField, getString("label.threadCount").replace(":", ""));
             }
         });
         inputPanel.add(searchThreadCountField, gbc);
@@ -174,9 +248,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.gridy = 2;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        JLabel heightLabel = new JLabel("筛选女巫小屋高度(高度越高搜索越慢):");
-        heightLabel.setFont(getLoadedFont());
-        inputPanel.add(heightLabel, gbc);
+        searchHeightLabel = new JLabel(getString("label.heightFilter"));
+        searchHeightLabel.setFont(getLoadedFont());
+        inputPanel.add(searchHeightLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -190,9 +264,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.gridy = 3;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        JLabel versionLabel = new JLabel("版本:");
-        versionLabel.setFont(getLoadedFont());
-        inputPanel.add(versionLabel, gbc);
+        searchVersionLabel = new JLabel(getString("label.version"));
+        searchVersionLabel.setFont(getLoadedFont());
+        inputPanel.add(searchVersionLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -216,7 +290,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         // 添加输入验证，非整数时提示
         minXField.addFocusListener(new java.awt.event.FocusAdapter() {
             public void focusLost(java.awt.event.FocusEvent e) {
-                validateIntegerInput(minXField, "MinX");
+                validateIntegerInput(minXField, getString("label.minX").replace(":", ""));
             }
         });
         inputPanel.add(minXField, gbc);
@@ -235,7 +309,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         maxXField = new JTextField(String.valueOf(DEFAULT_MAX_X), 20);
         maxXField.addFocusListener(new java.awt.event.FocusAdapter() {
             public void focusLost(java.awt.event.FocusEvent e) {
-                validateIntegerInput(maxXField, "MaxX");
+                validateIntegerInput(maxXField, getString("label.maxX").replace(":", ""));
             }
         });
         inputPanel.add(maxXField, gbc);
@@ -254,7 +328,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         minZField = new JTextField(String.valueOf(DEFAULT_MIN_Z), 20);
         minZField.addFocusListener(new java.awt.event.FocusAdapter() {
             public void focusLost(java.awt.event.FocusEvent e) {
-                validateIntegerInput(minZField, "MinZ");
+                validateIntegerInput(minZField, getString("label.minZ").replace(":", ""));
             }
         });
         inputPanel.add(minZField, gbc);
@@ -273,7 +347,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         maxZField = new JTextField(String.valueOf(DEFAULT_MAX_Z), 20);
         maxZField.addFocusListener(new java.awt.event.FocusAdapter() {
             public void focusLost(java.awt.event.FocusEvent e) {
-                validateIntegerInput(maxZField, "MaxZ");
+                validateIntegerInput(maxZField, getString("label.maxZ").replace(":", ""));
             }
         });
         inputPanel.add(maxZField, gbc);
@@ -283,9 +357,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.gridy = 8;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        JLabel checkGenerationLabel = new JLabel("精确检查生成情况(略微影响效率):");
-        checkGenerationLabel.setFont(getLoadedFont());
-        inputPanel.add(checkGenerationLabel, gbc);
+        searchCheckGenerationLabel = new JLabel(getString("label.checkGeneration"));
+        searchCheckGenerationLabel.setFont(getLoadedFont());
+        inputPanel.add(searchCheckGenerationLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -294,12 +368,34 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         searchCheckGenerationCheckBox.setFont(getLoadedFont());
         inputPanel.add(searchCheckGenerationCheckBox, gbc);
 
+        // 语言选择下拉框
+        gbc.gridx = 0;
+        gbc.gridy = 9;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        searchLanguageLabel = new JLabel(getString("label.language"));
+        searchLanguageLabel.setFont(getLoadedFont());
+        inputPanel.add(searchLanguageLabel, gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        String[] languageOptions = {"中文", "English"};
+        languageComboBox = new JComboBox<>(languageOptions);
+        // 根据当前语言设置默认选项
+        if (currentLocale.getLanguage().equals("zh")) {
+            languageComboBox.setSelectedIndex(0);
+        } else {
+            languageComboBox.setSelectedIndex(1);
+        }
+        languageComboBox.addActionListener(e -> changeLanguage());
+        inputPanel.add(languageComboBox, gbc);
+
         // 按钮区域
         JPanel buttonPanel = new JPanel(new FlowLayout());
-        searchStartButton = new JButton("开始搜索");
-        searchPauseButton = new JButton("暂停");
-        searchStopButton = new JButton("停止");
-        searchResetButton = new JButton("重置搜索区域为世界边界");
+        searchStartButton = new JButton(getString("button.startSearch"));
+        searchPauseButton = new JButton(getString("button.pause"));
+        searchStopButton = new JButton(getString("button.stop"));
+        searchResetButton = new JButton(getString("button.reset"));
         searchPauseButton.setEnabled(false);
         searchStopButton.setEnabled(false);
         buttonPanel.add(searchStartButton);
@@ -310,9 +406,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         // 静态文字展示区域（放在按钮上方）
         JPanel creditPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
         creditPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-        JLabel creditLabel = new JLabel("<html><div style='text-align: center;'><br><br><br><br><br>每一个种子<br>都有一个低y女巫小屋的梦想<br>——SunnySlopes<br>作者：b站@M33三角座星系<br>字体：江城黑体</div></html>");
-        creditLabel.setFont(getLoadedFont()); // 使用加载的字体
-        creditPanel.add(creditLabel);
+        searchCreditLabel = new JLabel(getString("credit.text"));
+        searchCreditLabel.setFont(getLoadedFont()); // 使用加载的字体
+        creditPanel.add(searchCreditLabel);
 
         // 将 credit 和按钮放在一个容器中，credit 在上，按钮在下
         JPanel creditButtonPanel = new JPanel(new BorderLayout());
@@ -332,16 +428,16 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         pgc.gridwidth = 2;
         searchProgressBar = new JProgressBar(0, 100);
         searchProgressBar.setStringPainted(true);
-        searchProgressBar.setString("进度: 0/0 (0.00%)");
+        searchProgressBar.setString(getString("progress.format", 0, 0, 0.0));
         progressPanel.add(searchProgressBar, pgc);
 
         pgc.gridwidth = 1;
         pgc.gridy = 1;
-        searchElapsedTimeLabel = new JLabel("已过时间: 0天 0时 0分 0秒");
+        searchElapsedTimeLabel = new JLabel(getString("elapsedTime", formatTime(0)));
         progressPanel.add(searchElapsedTimeLabel, pgc);
 
         pgc.gridy = 3;
-        searchRemainingTimeLabel = new JLabel("剩余时间: 计算中...");
+        searchRemainingTimeLabel = new JLabel(getString("remainingTime.calculating"));
         progressPanel.add(searchRemainingTimeLabel, pgc);
 
         leftPanel.add(inputPanel, BorderLayout.NORTH);
@@ -356,26 +452,26 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         leftContainer.add(leftBottomPanel, BorderLayout.SOUTH);
 
         // 右侧：结果显示
-        JPanel rightPanel = new JPanel(new BorderLayout());
-        rightPanel.setBorder(BorderFactory.createTitledBorder("检查结果(真实小屋y值可能会处于输出坐标±1格以内，开启精确搜索后可提示小屋是否能真实生成)"));
+        searchRightPanel = new JPanel(new BorderLayout());
+        searchRightPanel.setBorder(BorderFactory.createTitledBorder(getString("result.border")));
         searchResultArea = new JTextArea();
         searchResultArea.setEditable(false);
         searchResultArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         JScrollPane scrollPane = new JScrollPane(searchResultArea);
         scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
         JPanel exportSortPanel = new JPanel(new FlowLayout());
-        searchExportButton = new JButton("导出");
+        searchExportButton = new JButton(getString("button.export"));
         searchExportButton.addActionListener(e -> exportSearchResults());
-        searchSortButton = new JButton("排序");
+        searchSortButton = new JButton(getString("button.sort"));
         searchSortButton.addActionListener(e -> sortSearchResults());
         exportSortPanel.add(searchExportButton);
         exportSortPanel.add(searchSortButton);
-        rightPanel.add(scrollPane, BorderLayout.CENTER);
-        rightPanel.add(exportSortPanel, BorderLayout.SOUTH);
+        searchRightPanel.add(scrollPane, BorderLayout.CENTER);
+        searchRightPanel.add(exportSortPanel, BorderLayout.SOUTH);
 
         // 使用 JSplitPane 分割
-        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftContainer, rightPanel);
-        splitPane.setDividerLocation(450);
+        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftContainer, searchRightPanel);
+        splitPane.setDividerLocation(600);
         splitPane.setResizeWeight(0.5);
 
         mainPanel.add(splitPane, BorderLayout.CENTER);
@@ -464,7 +560,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 isSearchPaused = false;
                 searchStartButton.setEnabled(true);
                 searchPauseButton.setEnabled(false);
-                searchPauseButton.setText("暂停");
+                searchPauseButton.setText(getString("button.pause"));
                 searchStopButton.setEnabled(false);
                 searchResetButton.setEnabled(true);
                 searchSeedField.setEnabled(true);
@@ -476,10 +572,13 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 minZField.setEnabled(true);
                 maxZField.setEnabled(true);
                 searchCheckGenerationCheckBox.setEnabled(true);
+                if (languageComboBox != null) {
+                    languageComboBox.setEnabled(true);
+                }
                 searchResultArea.setText("");
                 searchProgressBar.setValue(0);
-                searchProgressBar.setString("进度: 0/0 (0.00%)");
-                searchRemainingTimeLabel.setText("剩余时间: 已重置（参数已更改）");
+                searchProgressBar.setString(getString("progress.format", 0, 0, 0.0));
+                searchRemainingTimeLabel.setText(getString("remainingTime.reset"));
             }
         } catch (NumberFormatException e) {
             // 忽略无效输入
@@ -497,7 +596,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             // 尝试解析为double，检查是否为整数
             double value = Double.parseDouble(text);
             if (value != Math.floor(value)) {
-                JOptionPane.showMessageDialog(this, fieldName + "必须为整数", "输入错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("validation.integerRequired", fieldName), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 field.requestFocus();
             }
         } catch (NumberFormatException e) {
@@ -529,7 +628,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 if (parts.length >= 3) {
                     try {
                         double y = Double.parseDouble(parts[1]);
-                        boolean cannotGenerate = line.contains("×");
+                        boolean cannotGenerate = line.contains("x");
                         if (cannotGenerate) {
                             invalidResults.add(new String[]{String.valueOf(y), line});
                         } else {
@@ -582,7 +681,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 String threadText = searchThreadCountField.getText().trim();
                 int threadCount = Integer.parseInt(threadText);
                 if (threadCount < 1) {
-                    JOptionPane.showMessageDialog(this, "线程数必须大于0", "错误", JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.showMessageDialog(this, getString("error.threadCountRequired"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                     return;
                 }
                 
@@ -591,8 +690,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 if (threadCount > cpuThreads) {
                     int result = JOptionPane.showConfirmDialog(
                         this,
-                        "线程数超过CPU核数（" + cpuThreads + "），是否自动调整为" + cpuThreads + "？",
-                        "提示",
+                        getString("error.threadCountExceedsCPU", cpuThreads, cpuThreads),
+                        getString("prompt.adjustThreadCount"),
                         JOptionPane.YES_NO_OPTION,
                         JOptionPane.QUESTION_MESSAGE
                     );
@@ -631,14 +730,14 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                             this::updateSearchProgress, this::addSearchResult, checkGeneration);
                     
                     lastSearchThreadCount = threadCount;
-                    searchPauseButton.setText("暂停");
+                    searchPauseButton.setText(getString("button.pause"));
                     searchThreadCountField.setEnabled(false);
                     return;
                 } else {
                     // 线程数没变化，直接恢复
                     searcher.resume();
                     isSearchPaused = false;
-                    searchPauseButton.setText("暂停");
+                    searchPauseButton.setText(getString("button.pause"));
                     searchThreadCountField.setEnabled(false);
                     return;
                 }
@@ -655,7 +754,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             // 验证种子
             String seedText = searchSeedField.getText().trim();
             if (seedText.isEmpty()) {
-                JOptionPane.showMessageDialog(this, "请输入种子值", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.seedRequired"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
             
@@ -664,11 +763,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             try {
                 seedDouble = Double.parseDouble(seedText);
                 if (seedDouble != Math.floor(seedDouble)) {
-                    JOptionPane.showMessageDialog(this, "种子必须为整数", "错误", JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.showMessageDialog(this, getString("error.seedMustBeInteger"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                     return;
                 }
             } catch (NumberFormatException e) {
-                JOptionPane.showMessageDialog(this, "种子格式错误，请输入整数", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.seedFormatError"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
             
@@ -677,7 +776,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             try {
                 seed = Long.parseLong(seedText);
             } catch (NumberFormatException e) {
-                JOptionPane.showMessageDialog(this, "种子值超出范围（绝对值不能超过2^63-1）", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.seedOutOfRange"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
             
@@ -687,17 +786,17 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             try {
                 threadDouble = Double.parseDouble(threadText);
                 if (threadDouble != Math.floor(threadDouble)) {
-                    JOptionPane.showMessageDialog(this, "线程数必须为整数", "错误", JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.showMessageDialog(this, getString("error.threadCountMustBeInteger"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                     return;
                 }
             } catch (NumberFormatException e) {
-                JOptionPane.showMessageDialog(this, "线程数格式错误，请输入整数", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.threadCountFormatError"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
             
             int threadCount = (int) threadDouble;
             if (threadCount < 1) {
-                JOptionPane.showMessageDialog(this, "线程数必须大于0", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.threadCountRequired"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
             
@@ -706,8 +805,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             if (threadCount > cpuThreads) {
                 int result = JOptionPane.showConfirmDialog(
                     this,
-                    "线程数超过CPU核数（" + cpuThreads + "），是否自动调整为" + cpuThreads + "？",
-                    "提示",
+                    getString("error.threadCountExceedsCPU", cpuThreads, cpuThreads),
+                    getString("prompt.adjustThreadCount"),
                     JOptionPane.YES_NO_OPTION,
                     JOptionPane.QUESTION_MESSAGE
                 );
@@ -734,12 +833,12 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             try {
                 minXDouble = Double.parseDouble(minXText);
                 if (minXDouble != Math.floor(minXDouble)) {
-                    JOptionPane.showMessageDialog(this, "MinX必须为整数，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.showMessageDialog(this, getString("error.minXMustBeInteger"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                     minXField.setText(String.valueOf(DEFAULT_MIN_X));
                     return;
                 }
             } catch (NumberFormatException e) {
-                JOptionPane.showMessageDialog(this, "MinX格式错误，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.minXFormatError"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 minXField.setText(String.valueOf(DEFAULT_MIN_X));
                 return;
             }
@@ -747,12 +846,12 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             try {
                 maxXDouble = Double.parseDouble(maxXText);
                 if (maxXDouble != Math.floor(maxXDouble)) {
-                    JOptionPane.showMessageDialog(this, "MaxX必须为整数，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.showMessageDialog(this, getString("error.maxXMustBeInteger"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                     maxXField.setText(String.valueOf(DEFAULT_MAX_X));
                     return;
                 }
             } catch (NumberFormatException e) {
-                JOptionPane.showMessageDialog(this, "MaxX格式错误，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.maxXFormatError"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 maxXField.setText(String.valueOf(DEFAULT_MAX_X));
                 return;
             }
@@ -760,12 +859,12 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             try {
                 minZDouble = Double.parseDouble(minZText);
                 if (minZDouble != Math.floor(minZDouble)) {
-                    JOptionPane.showMessageDialog(this, "MinZ必须为整数，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.showMessageDialog(this, getString("error.minZMustBeInteger"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                     minZField.setText(String.valueOf(DEFAULT_MIN_Z));
                     return;
                 }
             } catch (NumberFormatException e) {
-                JOptionPane.showMessageDialog(this, "MinZ格式错误，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.minZFormatError"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 minZField.setText(String.valueOf(DEFAULT_MIN_Z));
                 return;
             }
@@ -773,12 +872,12 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             try {
                 maxZDouble = Double.parseDouble(maxZText);
                 if (maxZDouble != Math.floor(maxZDouble)) {
-                    JOptionPane.showMessageDialog(this, "MaxZ必须为整数，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.showMessageDialog(this, getString("error.maxZMustBeInteger"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                     maxZField.setText(String.valueOf(DEFAULT_MAX_Z));
                     return;
                 }
             } catch (NumberFormatException e) {
-                JOptionPane.showMessageDialog(this, "MaxZ格式错误，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.maxZFormatError"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 maxZField.setText(String.valueOf(DEFAULT_MAX_Z));
                 return;
             }
@@ -789,12 +888,12 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             int maxZ = (int) maxZDouble;
             
             if (minX >= maxX) {
-                JOptionPane.showMessageDialog(this, "MinX 必须小于 MaxX", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.minXGreaterThanMaxX"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
             
             if (minZ >= maxZ) {
-                JOptionPane.showMessageDialog(this, "MinZ 必须小于 MaxZ", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.minZGreaterThanMaxZ"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
             
@@ -804,8 +903,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             if (outOfBounds) {
                 int result = JOptionPane.showConfirmDialog(
                     this,
-                    "输入的值超出世界边界，搜索出的小屋可能无法抵达，是否继续？",
-                    "警告",
+                    getString("error.outOfBounds"),
+                    getString("prompt.warning"),
                     JOptionPane.YES_NO_OPTION,
                     JOptionPane.WARNING_MESSAGE
                 );
@@ -827,7 +926,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             isSearchPaused = false;
             searchStartButton.setEnabled(false);
             searchPauseButton.setEnabled(true);
-            searchPauseButton.setText("暂停");
+            searchPauseButton.setText(getString("button.pause"));
             searchStopButton.setEnabled(true);
             searchResetButton.setEnabled(false);
             searchSeedField.setEnabled(false);
@@ -839,11 +938,14 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             minZField.setEnabled(false);
             maxZField.setEnabled(false);
             searchCheckGenerationCheckBox.setEnabled(false);
+            if (languageComboBox != null) {
+                languageComboBox.setEnabled(false);
+            }
             searchResultArea.setText("");
             searchProgressBar.setValue(0);
-            searchProgressBar.setString("进度: 0/0 (0.00%)");
-            searchElapsedTimeLabel.setText("已过时间: 0天 0时 0分 0秒");
-            searchRemainingTimeLabel.setText("剩余时间: 计算中...");
+            searchProgressBar.setString(getString("progress.format", 0, 0, 0.0));
+        searchElapsedTimeLabel.setText(getString("elapsedTime", formatTime(0)));
+        searchRemainingTimeLabel.setText(getString("remainingTime.calculating"));
 
             // 获取选择的版本
             String selectedVersion = (String) versionComboBox.getSelectedItem();
@@ -854,7 +956,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             searcher.startSearch(seed, threadCount, minX, maxX, minZ, maxZ, maxHeight, this::updateSearchProgress, this::addSearchResult, checkGeneration);
 
         } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(this, "请输入有效的数字", "错误", JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(this, getString("error.invalidNumber"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
         }
     }
 
@@ -867,13 +969,13 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             // 恢复（线程数变化会在startSearch中处理）
             searcher.resume();
             isSearchPaused = false;
-            searchPauseButton.setText("暂停");
+            searchPauseButton.setText(getString("button.pause"));
             searchThreadCountField.setEnabled(false); // 恢复后不能修改线程数
         } else {
             // 暂停
             searcher.pause();
             isSearchPaused = true;
-            searchPauseButton.setText("继续");
+                    searchPauseButton.setText(getString("button.resume"));
             searchThreadCountField.setEnabled(true); // 暂停时可以修改线程数
         }
     }
@@ -886,7 +988,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         isSearchPaused = false;
         searchStartButton.setEnabled(true);
         searchPauseButton.setEnabled(false);
-        searchPauseButton.setText("暂停");
+        searchPauseButton.setText(getString("button.pause"));
         searchStopButton.setEnabled(false);
         searchResetButton.setEnabled(true);
         searchSeedField.setEnabled(true);
@@ -898,7 +1000,10 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         minZField.setEnabled(true);
         maxZField.setEnabled(true);
         searchCheckGenerationCheckBox.setEnabled(true);
-        searchRemainingTimeLabel.setText("剩余时间: 已停止");
+        if (languageComboBox != null) {
+            languageComboBox.setEnabled(true);
+        }
+        searchRemainingTimeLabel.setText(getString("remainingTime.stopped"));
     }
 
     private void resetSearchToDefaults() {
@@ -925,16 +1030,16 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         // Seed 文件选择
         gbc.gridx = 0;
         gbc.gridy = 0;
-        JLabel seedLabel = new JLabel("种子文件:");
-        seedLabel.setFont(getLoadedFont());
-        inputPanel.add(seedLabel, gbc);
+        listSearchSeedFileTitleLabel = new JLabel(getString("label.seedFile"));
+        listSearchSeedFileTitleLabel.setFont(getLoadedFont());
+        inputPanel.add(listSearchSeedFileTitleLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
         JPanel seedFilePanel = new JPanel(new BorderLayout());
-        listSearchSeedFileButton = new JButton("选择文件");
+        listSearchSeedFileButton = new JButton(getString("button.selectFile"));
         listSearchSeedFileButton.addActionListener(e -> selectSeedFile());
-        listSearchSeedFileLabel = new JLabel("未选择文件");
+        listSearchSeedFileLabel = new JLabel(getString("label.noFileSelected"));
         listSearchSeedFileLabel.setFont(getLoadedFont());
         seedFilePanel.add(listSearchSeedFileButton, BorderLayout.WEST);
         seedFilePanel.add(listSearchSeedFileLabel, BorderLayout.CENTER);
@@ -945,16 +1050,16 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.gridy = 1;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        JLabel threadLabel = new JLabel("线程数:");
-        threadLabel.setFont(getLoadedFont());
-        inputPanel.add(threadLabel, gbc);
+        listSearchThreadCountLabel = new JLabel(getString("label.threadCount"));
+        listSearchThreadCountLabel.setFont(getLoadedFont());
+        inputPanel.add(listSearchThreadCountLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
         listSearchThreadCountField = new JTextField(String.valueOf(DEFAULT_THREAD_COUNT), 20);
         listSearchThreadCountField.addFocusListener(new java.awt.event.FocusAdapter() {
             public void focusLost(java.awt.event.FocusEvent e) {
-                validateIntegerInput(listSearchThreadCountField, "线程数");
+                validateIntegerInput(listSearchThreadCountField, getString("label.threadCount").replace(":", ""));
             }
         });
         inputPanel.add(listSearchThreadCountField, gbc);
@@ -964,9 +1069,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.gridy = 2;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        JLabel heightLabel = new JLabel("筛选女巫小屋高度(高度越高搜索越慢):");
-        heightLabel.setFont(getLoadedFont());
-        inputPanel.add(heightLabel, gbc);
+        listSearchHeightLabel = new JLabel(getString("label.heightFilter"));
+        listSearchHeightLabel.setFont(getLoadedFont());
+        inputPanel.add(listSearchHeightLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -980,9 +1085,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.gridy = 3;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        JLabel versionLabel = new JLabel("版本:");
-        versionLabel.setFont(getLoadedFont());
-        inputPanel.add(versionLabel, gbc);
+        listSearchVersionLabel = new JLabel(getString("label.version"));
+        listSearchVersionLabel.setFont(getLoadedFont());
+        inputPanel.add(listSearchVersionLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -996,16 +1101,16 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.gridy = 4;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        JLabel minXLabel = new JLabel("MinX(x512):");
-        minXLabel.setFont(getLoadedFont());
-        inputPanel.add(minXLabel, gbc);
+        listSearchMinXLabel = new JLabel(getString("label.minX"));
+        listSearchMinXLabel.setFont(getLoadedFont());
+        inputPanel.add(listSearchMinXLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
         listMinXField = new JTextField(String.valueOf(DEFAULT_LIST_MIN_X), 20);
         listMinXField.addFocusListener(new java.awt.event.FocusAdapter() {
             public void focusLost(java.awt.event.FocusEvent e) {
-                validateIntegerInput(listMinXField, "MinX");
+                validateIntegerInput(listMinXField, getString("label.minX").replace(":", ""));
             }
         });
         inputPanel.add(listMinXField, gbc);
@@ -1015,16 +1120,16 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.gridy = 5;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        JLabel maxXLabel = new JLabel("MaxX(x512):");
-        maxXLabel.setFont(getLoadedFont());
-        inputPanel.add(maxXLabel, gbc);
+        listSearchMaxXLabel = new JLabel(getString("label.maxX"));
+        listSearchMaxXLabel.setFont(getLoadedFont());
+        inputPanel.add(listSearchMaxXLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
         listMaxXField = new JTextField(String.valueOf(DEFAULT_LIST_MAX_X), 20);
         listMaxXField.addFocusListener(new java.awt.event.FocusAdapter() {
             public void focusLost(java.awt.event.FocusEvent e) {
-                validateIntegerInput(listMaxXField, "MaxX");
+                validateIntegerInput(listMaxXField, getString("label.maxX").replace(":", ""));
             }
         });
         inputPanel.add(listMaxXField, gbc);
@@ -1034,16 +1139,16 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.gridy = 6;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        JLabel minZLabel = new JLabel("MinZ(x512):");
-        minZLabel.setFont(getLoadedFont());
-        inputPanel.add(minZLabel, gbc);
+        listSearchMinZLabel = new JLabel(getString("label.minZ"));
+        listSearchMinZLabel.setFont(getLoadedFont());
+        inputPanel.add(listSearchMinZLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
         listMinZField = new JTextField(String.valueOf(DEFAULT_LIST_MIN_Z), 20);
         listMinZField.addFocusListener(new java.awt.event.FocusAdapter() {
             public void focusLost(java.awt.event.FocusEvent e) {
-                validateIntegerInput(listMinZField, "MinZ");
+                validateIntegerInput(listMinZField, getString("label.minZ").replace(":", ""));
             }
         });
         inputPanel.add(listMinZField, gbc);
@@ -1053,16 +1158,16 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.gridy = 7;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        JLabel maxZLabel = new JLabel("MaxZ(x512):");
-        maxZLabel.setFont(getLoadedFont());
-        inputPanel.add(maxZLabel, gbc);
+        listSearchMaxZLabel = new JLabel(getString("label.maxZ"));
+        listSearchMaxZLabel.setFont(getLoadedFont());
+        inputPanel.add(listSearchMaxZLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
         listMaxZField = new JTextField(String.valueOf(DEFAULT_LIST_MAX_Z), 20);
         listMaxZField.addFocusListener(new java.awt.event.FocusAdapter() {
             public void focusLost(java.awt.event.FocusEvent e) {
-                validateIntegerInput(listMaxZField, "MaxZ");
+                validateIntegerInput(listMaxZField, getString("label.maxZ").replace(":", ""));
             }
         });
         inputPanel.add(listMaxZField, gbc);
@@ -1072,9 +1177,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.gridy = 8;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        JLabel listCheckGenerationLabel = new JLabel("精确检查生成情况(略微影响效率):");
-        listCheckGenerationLabel.setFont(getLoadedFont());
-        inputPanel.add(listCheckGenerationLabel, gbc);
+        listSearchCheckGenerationLabel = new JLabel(getString("label.checkGeneration"));
+        listSearchCheckGenerationLabel.setFont(getLoadedFont());
+        inputPanel.add(listSearchCheckGenerationLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -1085,10 +1190,10 @@ public class LowYSwampHutForFixedSeed extends JFrame {
 
         // 按钮区域
         JPanel buttonPanel = new JPanel(new FlowLayout());
-        listSearchStartButton = new JButton("开始搜索");
-        listSearchPauseButton = new JButton("暂停");
-        listSearchStopButton = new JButton("停止");
-        listSearchResetButton = new JButton("重置搜索区域为默认值");
+        listSearchStartButton = new JButton(getString("button.startSearch"));
+        listSearchPauseButton = new JButton(getString("button.pause"));
+        listSearchStopButton = new JButton(getString("button.stop"));
+        listSearchResetButton = new JButton(getString("button.resetList"));
         listSearchPauseButton.setEnabled(false);
         listSearchStopButton.setEnabled(false);
         buttonPanel.add(listSearchStartButton);
@@ -1099,9 +1204,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         // 静态文字展示区域（放在按钮上方）
         JPanel creditPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
         creditPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-        JLabel creditLabel = new JLabel("<html><div style='text-align: center;'><br><br><br><br><br>每一个种子<br>都有一个低y女巫小屋的梦想<br>——SunnySlopes<br>作者：b站@M33三角座星系<br>字体：江城黑体</div></html>");
-        creditLabel.setFont(getLoadedFont());
-        creditPanel.add(creditLabel);
+        listSearchCreditLabel = new JLabel(getString("credit.text"));
+        listSearchCreditLabel.setFont(getLoadedFont());
+        creditPanel.add(listSearchCreditLabel);
 
         // 将 credit 和按钮放在一个容器中，credit 在上，按钮在下
         JPanel creditButtonPanel = new JPanel(new BorderLayout());
@@ -1121,21 +1226,21 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         pgc.gridwidth = 2;
         listSearchProgressBar = new JProgressBar(0, 100);
         listSearchProgressBar.setStringPainted(true);
-        listSearchProgressBar.setString("进度: 0/0 (0.00%)");
+        listSearchProgressBar.setString(getString("progress.total", 0, 0, 0.0));
         progressPanel.add(listSearchProgressBar, pgc);
 
         pgc.gridwidth = 1;
         pgc.gridy = 1;
-        listSearchElapsedTimeLabel = new JLabel("已过时间: 0天 0时 0分 0秒");
+        listSearchElapsedTimeLabel = new JLabel(getString("elapsedTime", formatTime(0)));
         progressPanel.add(listSearchElapsedTimeLabel, pgc);
 
         pgc.gridy = 2;
-        listSearchCurrentSeedProgressLabel = new JLabel("当前种子: -/-，进度: 0.00%");
+        listSearchCurrentSeedProgressLabel = new JLabel(getString("currentSeed.default"));
         listSearchCurrentSeedProgressLabel.setFont(getLoadedFont());
         progressPanel.add(listSearchCurrentSeedProgressLabel, pgc);
 
         pgc.gridy = 3;
-        listSearchRemainingTimeLabel = new JLabel("剩余时间: 计算中...");
+        listSearchRemainingTimeLabel = new JLabel(getString("remainingTime.calculating"));
         progressPanel.add(listSearchRemainingTimeLabel, pgc);
 
         leftPanel.add(inputPanel, BorderLayout.NORTH);
@@ -1150,32 +1255,32 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         leftContainer.add(leftBottomPanel, BorderLayout.SOUTH);
 
         // 右侧：结果显示
-        JPanel rightPanel = new JPanel(new BorderLayout());
-        rightPanel.setBorder(BorderFactory.createTitledBorder("检查结果(真实小屋y值可能会处于输出坐标±1格以内，开启精确搜索后可提示小屋是否能真实生成)"));
+        listSearchRightPanel = new JPanel(new BorderLayout());
+        listSearchRightPanel.setBorder(BorderFactory.createTitledBorder(getString("result.border")));
         listSearchResultArea = new JTextArea();
         listSearchResultArea.setEditable(false);
         listSearchResultArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         JScrollPane scrollPane = new JScrollPane(listSearchResultArea);
         scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
         JPanel exportPanel = new JPanel(new FlowLayout());
-        listSearchExportButton = new JButton("导出");
+        listSearchExportButton = new JButton(getString("button.export"));
         listSearchExportButton.addActionListener(e -> exportListSearchResults());
-        listSearchExportSeedListButton = new JButton("导出种子列表");
+        listSearchExportSeedListButton = new JButton(getString("button.exportSeedList"));
         listSearchExportSeedListButton.addActionListener(e -> exportSeedList());
-        listSortByYButton = new JButton("按最低y排序");
+        listSortByYButton = new JButton(getString("button.sortByY"));
         listSortByYButton.addActionListener(e -> sortListByLowestY());
-        listSortByDistanceButton = new JButton("按距离排序");
+        listSortByDistanceButton = new JButton(getString("button.sortByDistance"));
         listSortByDistanceButton.addActionListener(e -> sortListByDistance());
         exportPanel.add(listSearchExportButton);
         exportPanel.add(listSearchExportSeedListButton);
         exportPanel.add(listSortByYButton);
         exportPanel.add(listSortByDistanceButton);
-        rightPanel.add(scrollPane, BorderLayout.CENTER);
-        rightPanel.add(exportPanel, BorderLayout.SOUTH);
+        listSearchRightPanel.add(scrollPane, BorderLayout.CENTER);
+        listSearchRightPanel.add(exportPanel, BorderLayout.SOUTH);
 
         // 使用 JSplitPane 分割
-        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftContainer, rightPanel);
-        splitPane.setDividerLocation(450);
+        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftContainer, listSearchRightPanel);
+        splitPane.setDividerLocation(600);
         splitPane.setResizeWeight(0.5);
 
         mainPanel.add(splitPane, BorderLayout.CENTER);
@@ -1199,18 +1304,18 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             int progress = (int) Math.min(100, info.percentage);
             searchProgressBar.setValue(progress);
             // 将进度信息显示在进度条中
-            searchProgressBar.setString(String.format("进度: %d/%d (%.2f%%)", info.processed, info.total, info.percentage));
+                searchProgressBar.setString(getString("progress.format", info.processed, info.total, info.percentage));
             
             // 暂停时不更新时间
             if (!isSearchPaused) {
-                searchElapsedTimeLabel.setText("已过时间: " + formatTime(info.elapsedMs));
+                searchElapsedTimeLabel.setText(getString("elapsedTime", formatTime(info.elapsedMs)));
                 if (info.remainingMs > 0) {
-                    searchRemainingTimeLabel.setText("剩余时间: " + formatTime(info.remainingMs));
+                    searchRemainingTimeLabel.setText(getString("remainingTime", formatTime(info.remainingMs)));
                 } else {
-                    searchRemainingTimeLabel.setText("剩余时间: 计算中...");
+                    searchRemainingTimeLabel.setText(getString("remainingTime.calculating"));
                 }
             } else {
-                searchRemainingTimeLabel.setText("剩余时间: 已暂停");
+                searchRemainingTimeLabel.setText(getString("remainingTime.paused"));
             }
 
             if (info.processed >= info.total) {
@@ -1218,7 +1323,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 isSearchPaused = false;
                 searchStartButton.setEnabled(true);
                 searchPauseButton.setEnabled(false);
-                searchPauseButton.setText("暂停");
+                searchPauseButton.setText(getString("button.pause"));
                 searchStopButton.setEnabled(false);
                 searchResetButton.setEnabled(true);
                 searchSeedField.setEnabled(true);
@@ -1230,9 +1335,12 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 minZField.setEnabled(true);
                 maxZField.setEnabled(true);
                 searchCheckGenerationCheckBox.setEnabled(true);
+                if (languageComboBox != null) {
+                    languageComboBox.setEnabled(true);
+                }
                 // 不再弹框，只在进度条中显示完成
-                searchProgressBar.setString(String.format("进度: %d/%d (100.00%%) - 完成", info.processed, info.total));
-                searchRemainingTimeLabel.setText("剩余时间: 已完成");
+                searchProgressBar.setString(getString("progress.complete", info.processed, info.total));
+                searchRemainingTimeLabel.setText(getString("remainingTime.completed"));
             }
         });
     }
@@ -1246,23 +1354,23 @@ public class LowYSwampHutForFixedSeed extends JFrame {
 
     private void exportSearchResults() {
         if (searchResultArea.getText().trim().isEmpty()) {
-            JOptionPane.showMessageDialog(this, "没有结果可导出", "提示", JOptionPane.INFORMATION_MESSAGE);
+            JOptionPane.showMessageDialog(this, getString("error.noResultsToExport"), getString("prompt.information"), JOptionPane.INFORMATION_MESSAGE);
             return;
         }
 
         JFileChooser fileChooser = new JFileChooser();
-        fileChooser.setDialogTitle("导出搜索结果");
-        fileChooser.setFileFilter(new FileNameExtensionFilter("文本文件 (*.txt)", "txt"));
-        fileChooser.setSelectedFile(new File("search_output.txt"));
+        fileChooser.setDialogTitle(getString("dialog.exportResults"));
+        fileChooser.setFileFilter(new FileNameExtensionFilter(getString("dialog.textFiles"), "txt"));
+        fileChooser.setSelectedFile(new File(getString("file.searchOutput")));
 
         int result = fileChooser.showSaveDialog(this);
         if (result == JFileChooser.APPROVE_OPTION) {
             File file = fileChooser.getSelectedFile();
             try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
                 writer.print(searchResultArea.getText());
-                JOptionPane.showMessageDialog(this, "导出成功！", "成功", JOptionPane.INFORMATION_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("success.export"), getString("prompt.success"), JOptionPane.INFORMATION_MESSAGE);
             } catch (IOException e) {
-                JOptionPane.showMessageDialog(this, "导出失败: " + e.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.exportFailed", e.getMessage()), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
             }
         }
     }
@@ -1274,7 +1382,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         long hours = (totalSeconds % 86400) / 3600;
         long minutes = (totalSeconds % 3600) / 60;
         long seconds = totalSeconds % 60;
-        return String.format("%d天 %d时 %d分 %d秒", days, hours, minutes, seconds);
+        return getString("time.format", days, hours, minutes, seconds);
     }
 
     /**
@@ -1380,6 +1488,257 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         }
     }
     
+    /**
+     * 切换语言
+     */
+    private void changeLanguage() {
+        // 如果正在搜索或暂停，不允许切换语言
+        if (isSearchRunning || isSearchPaused || isListSearchRunning || isListSearchPaused) {
+            // 恢复原来的选择
+            if (languageComboBox != null) {
+                if (currentLocale.getLanguage().equals("zh")) {
+                    languageComboBox.setSelectedIndex(0);
+                } else {
+                    languageComboBox.setSelectedIndex(1);
+                }
+            }
+            return;
+        }
+        
+        // 获取选择的语言（从第一个tab的语言下拉框获取）
+        String selectedLanguage = null;
+        if (languageComboBox != null) {
+            selectedLanguage = (String) languageComboBox.getSelectedItem();
+        }
+        
+        if (selectedLanguage == null) {
+            return;
+        }
+        
+        // 根据选择设置Locale
+        Locale newLocale;
+        if ("中文".equals(selectedLanguage)) {
+            newLocale = new Locale("zh", "CN");
+        } else {
+            newLocale = new Locale("en", "US");
+        }
+        
+        // 如果语言没有变化，不执行切换
+        if (newLocale.equals(currentLocale)) {
+            return;
+        }
+        
+        // 重新加载ResourceBundle
+        try {
+            currentLocale = newLocale;
+            messages = ResourceBundle.getBundle("messages", currentLocale);
+        } catch (Exception e) {
+            System.err.println("加载语言资源失败: " + e.getMessage());
+            return;
+        }
+        
+        
+        // 更新所有UI文本
+        updateUITexts();
+    }
+    
+    /**
+     * 更新所有UI文本
+     */
+    private void updateUITexts() {
+        SwingUtilities.invokeLater(() -> {
+            // 更新窗口标题
+            setTitle(getString("window.title"));
+            
+            // 更新标签页标题
+            JTabbedPane tabbedPane = (JTabbedPane) getContentPane().getComponent(0);
+            if (tabbedPane != null) {
+                tabbedPane.setTitleAt(0, getString("tab.singleSeedSearch"));
+                tabbedPane.setTitleAt(1, getString("tab.listSearch"));
+            }
+            
+            // 更新单种子搜索面板的所有文本
+            updateSingleSeedSearchTexts();
+            
+            // 更新列表搜索面板的所有文本
+            updateListSearchTexts();
+        });
+    }
+    
+    /**
+     * 更新单种子搜索面板的文本
+     */
+    private void updateSingleSeedSearchTexts() {
+        // 更新所有标签文本
+        if (searchSeedLabel != null) {
+            searchSeedLabel.setText(getString("label.seed"));
+        }
+        if (searchThreadCountLabel != null) {
+            searchThreadCountLabel.setText(getString("label.threadCount"));
+        }
+        if (searchHeightLabel != null) {
+            searchHeightLabel.setText(getString("label.heightFilter"));
+        }
+        if (searchVersionLabel != null) {
+            searchVersionLabel.setText(getString("label.version"));
+        }
+        if (searchMinXLabel != null) {
+            searchMinXLabel.setText(getString("label.minX"));
+        }
+        if (searchMaxXLabel != null) {
+            searchMaxXLabel.setText(getString("label.maxX"));
+        }
+        if (searchMinZLabel != null) {
+            searchMinZLabel.setText(getString("label.minZ"));
+        }
+        if (searchMaxZLabel != null) {
+            searchMaxZLabel.setText(getString("label.maxZ"));
+        }
+        if (searchCheckGenerationLabel != null) {
+            searchCheckGenerationLabel.setText(getString("label.checkGeneration"));
+        }
+        if (searchLanguageLabel != null) {
+            searchLanguageLabel.setText(getString("label.language"));
+        }
+        
+        // 更新credit文本
+        if (searchCreditLabel != null) {
+            searchCreditLabel.setText(getString("credit.text"));
+        }
+        
+        // 更新右侧面板边框
+        if (searchRightPanel != null) {
+            searchRightPanel.setBorder(BorderFactory.createTitledBorder(getString("result.border")));
+        }
+        
+        // 更新按钮文本
+        if (searchStartButton != null) {
+            searchStartButton.setText(getString("button.startSearch"));
+        }
+        if (searchPauseButton != null) {
+            searchPauseButton.setText(isSearchPaused ? getString("button.resume") : getString("button.pause"));
+        }
+        if (searchStopButton != null) {
+            searchStopButton.setText(getString("button.stop"));
+        }
+        if (searchResetButton != null) {
+            searchResetButton.setText(getString("button.reset"));
+        }
+        if (searchExportButton != null) {
+            searchExportButton.setText(getString("button.export"));
+        }
+        if (searchSortButton != null) {
+            searchSortButton.setText(getString("button.sort"));
+        }
+        
+        // 更新进度条和标签
+        if (searchProgressBar != null && !isSearchRunning) {
+            searchProgressBar.setString(getString("progress.format", 0, 0, 0.0));
+        }
+        if (searchElapsedTimeLabel != null && !isSearchRunning) {
+            searchElapsedTimeLabel.setText(getString("elapsedTime", formatTime(0)));
+        }
+        if (searchRemainingTimeLabel != null && !isSearchRunning) {
+            searchRemainingTimeLabel.setText(getString("remainingTime.calculating"));
+        }
+    }
+    
+    /**
+     * 更新列表搜索面板的文本
+     */
+    private void updateListSearchTexts() {
+        // 更新所有标签文本
+        if (listSearchSeedFileTitleLabel != null) {
+            listSearchSeedFileTitleLabel.setText(getString("label.seedFile"));
+        }
+        if (listSearchThreadCountLabel != null) {
+            listSearchThreadCountLabel.setText(getString("label.threadCount"));
+        }
+        if (listSearchHeightLabel != null) {
+            listSearchHeightLabel.setText(getString("label.heightFilter"));
+        }
+        if (listSearchVersionLabel != null) {
+            listSearchVersionLabel.setText(getString("label.version"));
+        }
+        if (listSearchMinXLabel != null) {
+            listSearchMinXLabel.setText(getString("label.minX"));
+        }
+        if (listSearchMaxXLabel != null) {
+            listSearchMaxXLabel.setText(getString("label.maxX"));
+        }
+        if (listSearchMinZLabel != null) {
+            listSearchMinZLabel.setText(getString("label.minZ"));
+        }
+        if (listSearchMaxZLabel != null) {
+            listSearchMaxZLabel.setText(getString("label.maxZ"));
+        }
+        if (listSearchCheckGenerationLabel != null) {
+            listSearchCheckGenerationLabel.setText(getString("label.checkGeneration"));
+        }
+        
+        // 更新按钮文本
+        if (listSearchStartButton != null) {
+            listSearchStartButton.setText(getString("button.startSearch"));
+        }
+        if (listSearchPauseButton != null) {
+            listSearchPauseButton.setText(isListSearchPaused ? getString("button.resume") : getString("button.pause"));
+        }
+        if (listSearchStopButton != null) {
+            listSearchStopButton.setText(getString("button.stop"));
+        }
+        if (listSearchResetButton != null) {
+            listSearchResetButton.setText(getString("button.resetList"));
+        }
+        if (listSearchExportButton != null) {
+            listSearchExportButton.setText(getString("button.export"));
+        }
+        if (listSearchExportSeedListButton != null) {
+            listSearchExportSeedListButton.setText(getString("button.exportSeedList"));
+        }
+        if (listSortByYButton != null) {
+            listSortByYButton.setText(getString("button.sortByY"));
+        }
+        if (listSortByDistanceButton != null) {
+            listSortByDistanceButton.setText(getString("button.sortByDistance"));
+        }
+        if (listSearchSeedFileButton != null) {
+            listSearchSeedFileButton.setText(getString("button.selectFile"));
+        }
+        
+        // 更新种子文件标签
+        if (listSearchSeedFileLabel != null) {
+            if (selectedSeedFile != null && selectedSeedFile.exists()) {
+                listSearchSeedFileLabel.setText(selectedSeedFile.getName());
+            } else {
+                listSearchSeedFileLabel.setText(getString("label.noFileSelected"));
+            }
+        }
+        
+        // 更新进度条和标签
+        if (listSearchProgressBar != null && !isListSearchRunning) {
+            listSearchProgressBar.setString(getString("progress.total", 0, 0, 0.0));
+        }
+        if (listSearchElapsedTimeLabel != null && !isListSearchRunning) {
+            listSearchElapsedTimeLabel.setText(getString("elapsedTime", formatTime(0)));
+        }
+        if (listSearchRemainingTimeLabel != null && !isListSearchRunning) {
+            listSearchRemainingTimeLabel.setText(getString("remainingTime.calculating"));
+        }
+        if (listSearchCurrentSeedProgressLabel != null && !isListSearchRunning) {
+            listSearchCurrentSeedProgressLabel.setText(getString("currentSeed.default"));
+        }
+        
+        // 更新credit文本
+        if (listSearchCreditLabel != null) {
+            listSearchCreditLabel.setText(getString("credit.text"));
+        }
+        
+        // 更新右侧面板边框
+        if (listSearchRightPanel != null) {
+            listSearchRightPanel.setBorder(BorderFactory.createTitledBorder(getString("result.border")));
+        }
+    }
+    
     // ========== 从种子列表搜索相关方法 ==========
     
     // 添加搜索参数监听器，检测参数变化（不包括线程数）
@@ -1444,7 +1803,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 isListSearchPaused = false;
                 listSearchStartButton.setEnabled(true);
                 listSearchPauseButton.setEnabled(false);
-                listSearchPauseButton.setText("暂停");
+                listSearchPauseButton.setText(getString("button.pause"));
                 listSearchStopButton.setEnabled(false);
                 listSearchResetButton.setEnabled(true);
                 listSearchSeedFileButton.setEnabled(true);
@@ -1458,9 +1817,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 listSearchCheckGenerationCheckBox.setEnabled(true);
             listSearchResultArea.setText("");
             listSearchProgressBar.setValue(0);
-            listSearchProgressBar.setString("总进度: 0/0 (0.00%)");
-            listSearchCurrentSeedProgressLabel.setText("当前种子: -/-，进度: 0.00%");
-            listSearchRemainingTimeLabel.setText("剩余时间: 已重置（参数已更改）");
+            listSearchProgressBar.setString(getString("progress.total", 0, 0, 0.0));
+            listSearchCurrentSeedProgressLabel.setText(getString("currentSeed.default"));
+            listSearchRemainingTimeLabel.setText(getString("remainingTime.reset"));
             }
         } catch (NumberFormatException e) {
             // 忽略无效输入
@@ -1470,8 +1829,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     // 选择种子文件
     private void selectSeedFile() {
         JFileChooser fileChooser = new JFileChooser();
-        fileChooser.setDialogTitle("选择种子文件");
-        fileChooser.setFileFilter(new FileNameExtensionFilter("文本文件 (*.txt)", "txt"));
+        fileChooser.setDialogTitle(getString("dialog.selectSeedFile"));
+        fileChooser.setFileFilter(new FileNameExtensionFilter(getString("dialog.textFiles"), "txt"));
         
         int result = fileChooser.showOpenDialog(this);
         if (result == JFileChooser.APPROVE_OPTION) {
@@ -1511,7 +1870,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 String threadText = listSearchThreadCountField.getText().trim();
                 int threadCount = Integer.parseInt(threadText);
                 if (threadCount < 1) {
-                    JOptionPane.showMessageDialog(this, "线程数必须大于0", "错误", JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.showMessageDialog(this, getString("error.threadCountRequired"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                     return;
                 }
                 
@@ -1520,8 +1879,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 if (threadCount > cpuThreads) {
                     int result = JOptionPane.showConfirmDialog(
                         this,
-                        "线程数超过CPU核数（" + cpuThreads + "），是否自动调整为" + cpuThreads + "？",
-                        "提示",
+                        getString("error.threadCountExceedsCPU", cpuThreads, cpuThreads),
+                        getString("prompt.adjustThreadCount"),
                         JOptionPane.YES_NO_OPTION,
                         JOptionPane.QUESTION_MESSAGE
                     );
@@ -1550,7 +1909,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                         listSearcher.resume();
                     }
                     isListSearchPaused = false;
-                    listSearchPauseButton.setText("暂停");
+                    listSearchPauseButton.setText(getString("button.pause"));
                     listSearchThreadCountField.setEnabled(false);
                     return;
                 } else {
@@ -1559,14 +1918,14 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                         listSearcher.resume();
                     }
                     isListSearchPaused = false;
-                    listSearchPauseButton.setText("暂停");
+                    listSearchPauseButton.setText(getString("button.pause"));
                     listSearchThreadCountField.setEnabled(false);
                     return;
                 }
             } catch (NumberFormatException e) {
                 JOptionPane.showMessageDialog(this, 
-                    "线程数格式错误，无法继续", 
-                    "错误", 
+                    getString("error.threadCountFormatErrorContinue"), 
+                    getString("prompt.error"), 
                     JOptionPane.ERROR_MESSAGE);
                 return;
             }
@@ -1575,7 +1934,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         try {
             // 验证种子文件
             if (selectedSeedFile == null || !selectedSeedFile.exists()) {
-                JOptionPane.showMessageDialog(this, "请选择种子文件", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.seedFileRequired"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
             
@@ -1584,7 +1943,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             try {
                 seeds = readSeedList(selectedSeedFile);
                 if (seeds.isEmpty()) {
-                    JOptionPane.showMessageDialog(this, "种子文件为空或没有有效的种子", "错误", JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.showMessageDialog(this, getString("error.seedFileEmpty"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                     return;
                 }
                 // 在导入时设置进度条为0/种子数
@@ -1592,11 +1951,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 SwingUtilities.invokeLater(() -> {
                     listSearchProgressBar.setMaximum((int) totalSeeds);
                     listSearchProgressBar.setValue(0);
-                    listSearchProgressBar.setString(String.format("总进度: 0/%d (0.00%%)", totalSeeds));
-                    listSearchCurrentSeedProgressLabel.setText("当前种子: -/-，进度: 0.00%");
+                    listSearchProgressBar.setString(getString("progress.total", 0, totalSeeds, 0.0));
+                    listSearchCurrentSeedProgressLabel.setText(getString("currentSeed.default"));
                 });
             } catch (IOException e) {
-                JOptionPane.showMessageDialog(this, "读取种子文件失败: " + e.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.seedFileReadFailed", e.getMessage()), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
             
@@ -1606,17 +1965,17 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             try {
                 threadDouble = Double.parseDouble(threadText);
                 if (threadDouble != Math.floor(threadDouble)) {
-                    JOptionPane.showMessageDialog(this, "线程数必须为整数", "错误", JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.showMessageDialog(this, getString("error.threadCountMustBeInteger"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                     return;
                 }
             } catch (NumberFormatException e) {
-                JOptionPane.showMessageDialog(this, "线程数格式错误，请输入整数", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.threadCountFormatError"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
             
             int threadCount = (int) threadDouble;
             if (threadCount < 1) {
-                JOptionPane.showMessageDialog(this, "线程数必须大于0", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.threadCountRequired"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
             
@@ -1625,8 +1984,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             if (threadCount > cpuThreads) {
                 int result = JOptionPane.showConfirmDialog(
                     this,
-                    "线程数超过CPU核数（" + cpuThreads + "），是否自动调整为" + cpuThreads + "？",
-                    "提示",
+                    getString("error.threadCountExceedsCPU", cpuThreads, cpuThreads),
+                    getString("prompt.adjustThreadCount"),
                     JOptionPane.YES_NO_OPTION,
                     JOptionPane.QUESTION_MESSAGE
                 );
@@ -1653,12 +2012,12 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             try {
                 minXDouble = Double.parseDouble(minXText);
                 if (minXDouble != Math.floor(minXDouble)) {
-                    JOptionPane.showMessageDialog(this, "MinX必须为整数，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.showMessageDialog(this, getString("error.minXMustBeInteger"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                     listMinXField.setText(String.valueOf(DEFAULT_LIST_MIN_X));
                     return;
                 }
             } catch (NumberFormatException e) {
-                JOptionPane.showMessageDialog(this, "MinX格式错误，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.minXFormatError"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 listMinXField.setText(String.valueOf(DEFAULT_LIST_MIN_X));
                 return;
             }
@@ -1666,12 +2025,12 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             try {
                 maxXDouble = Double.parseDouble(maxXText);
                 if (maxXDouble != Math.floor(maxXDouble)) {
-                    JOptionPane.showMessageDialog(this, "MaxX必须为整数，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.showMessageDialog(this, getString("error.maxXMustBeInteger"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                     listMaxXField.setText(String.valueOf(DEFAULT_LIST_MAX_X));
                     return;
                 }
             } catch (NumberFormatException e) {
-                JOptionPane.showMessageDialog(this, "MaxX格式错误，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.maxXFormatError"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 listMaxXField.setText(String.valueOf(DEFAULT_LIST_MAX_X));
                 return;
             }
@@ -1679,12 +2038,12 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             try {
                 minZDouble = Double.parseDouble(minZText);
                 if (minZDouble != Math.floor(minZDouble)) {
-                    JOptionPane.showMessageDialog(this, "MinZ必须为整数，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.showMessageDialog(this, getString("error.minZMustBeInteger"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                     listMinZField.setText(String.valueOf(DEFAULT_LIST_MIN_Z));
                     return;
                 }
             } catch (NumberFormatException e) {
-                JOptionPane.showMessageDialog(this, "MinZ格式错误，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.minZFormatError"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 listMinZField.setText(String.valueOf(DEFAULT_LIST_MIN_Z));
                 return;
             }
@@ -1692,12 +2051,12 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             try {
                 maxZDouble = Double.parseDouble(maxZText);
                 if (maxZDouble != Math.floor(maxZDouble)) {
-                    JOptionPane.showMessageDialog(this, "MaxZ必须为整数，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.showMessageDialog(this, getString("error.maxZMustBeInteger"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                     listMaxZField.setText(String.valueOf(DEFAULT_LIST_MAX_Z));
                     return;
                 }
             } catch (NumberFormatException e) {
-                JOptionPane.showMessageDialog(this, "MaxZ格式错误，已重置为默认值", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.maxZFormatError"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 listMaxZField.setText(String.valueOf(DEFAULT_LIST_MAX_Z));
                 return;
             }
@@ -1708,12 +2067,12 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             int maxZ = (int) maxZDouble;
             
             if (minX >= maxX) {
-                JOptionPane.showMessageDialog(this, "MinX 必须小于 MaxX", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.minXGreaterThanMaxX"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
             
             if (minZ >= maxZ) {
-                JOptionPane.showMessageDialog(this, "MinZ 必须小于 MaxZ", "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.minZGreaterThanMaxZ"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
                 return;
             }
             
@@ -1729,7 +2088,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             isListSearchPaused = false;
             listSearchStartButton.setEnabled(false);
             listSearchPauseButton.setEnabled(true);
-            listSearchPauseButton.setText("暂停");
+            listSearchPauseButton.setText(getString("button.pause"));
             listSearchStopButton.setEnabled(true);
             listSearchResetButton.setEnabled(false);
             listSearchSeedFileButton.setEnabled(false);
@@ -1743,10 +2102,10 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             listSearchCheckGenerationCheckBox.setEnabled(false);
             listSearchResultArea.setText("");
             listSearchProgressBar.setValue(0);
-            listSearchProgressBar.setString("总进度: 0/0 (0.00%)");
-            listSearchCurrentSeedProgressLabel.setText("当前种子: -/-，进度: 0.00%");
-            listSearchElapsedTimeLabel.setText("已过时间: 0天 0时 0分 0秒");
-            listSearchRemainingTimeLabel.setText("剩余时间: 计算中...");
+            listSearchProgressBar.setString(getString("progress.total", 0, 0, 0.0));
+            listSearchCurrentSeedProgressLabel.setText(getString("currentSeed.default"));
+            listSearchElapsedTimeLabel.setText(getString("elapsedTime", formatTime(0)));
+            listSearchRemainingTimeLabel.setText(getString("remainingTime.calculating"));
             
             // 清空之前的结果
             seedResults.clear();
@@ -1785,8 +2144,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                         SwingUtilities.invokeLater(() -> {
                             if (isListSearchRunning) {
                                 listSearchCurrentSeedProgressLabel.setText(
-                                    String.format("当前种子: %d/%d，进度: %d/%d (%.2f%%)", 
-                                        currentSeedIndex, totalSeeds, info.processed, info.total, info.percentage)
+                                    getString("currentSeed", currentSeedIndex, totalSeeds, info.processed, info.total, info.percentage)
                                 );
                             }
                         });
@@ -1829,13 +2187,13 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                     
                     SwingUtilities.invokeLater(() -> {
                         listSearchProgressBar.setValue(completedSeeds);
-                        listSearchProgressBar.setString(String.format("总进度: %d/%d (%.2f%%)", completedSeeds, totalSeeds, percentage));
+                        listSearchProgressBar.setString(getString("progress.total", completedSeeds, totalSeeds, percentage));
                         if (!isListSearchPaused) {
-                            listSearchElapsedTimeLabel.setText("已过时间: " + formatTime(elapsedMs));
+                            listSearchElapsedTimeLabel.setText(getString("elapsedTime", formatTime(elapsedMs)));
                             if (remainingMs > 0) {
-                                listSearchRemainingTimeLabel.setText("剩余时间: " + formatTime(remainingMs));
+                                listSearchRemainingTimeLabel.setText(getString("remainingTime", formatTime(remainingMs)));
                             } else {
-                                listSearchRemainingTimeLabel.setText("剩余时间: 计算中...");
+                                listSearchRemainingTimeLabel.setText(getString("remainingTime.calculating"));
                             }
                         }
                     });
@@ -1860,7 +2218,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                     isListSearchPaused = false;
                     listSearchStartButton.setEnabled(true);
                     listSearchPauseButton.setEnabled(false);
-                    listSearchPauseButton.setText("暂停");
+                    listSearchPauseButton.setText(getString("button.pause"));
                     listSearchStopButton.setEnabled(false);
                     listSearchResetButton.setEnabled(true);
                     listSearchSeedFileButton.setEnabled(true);
@@ -1873,15 +2231,15 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                     listMaxZField.setEnabled(true);
                     listSearchCheckGenerationCheckBox.setEnabled(true);
                     listSearchProgressBar.setValue((int) totalSeeds);
-                    listSearchProgressBar.setString(String.format("总进度: %d/%d (100.00%%) - 完成", totalSeeds, totalSeeds));
-                    listSearchCurrentSeedProgressLabel.setText("当前种子: -/-，进度: 100.00%");
-                    listSearchElapsedTimeLabel.setText("已过时间: " + formatTime(finalElapsedMs));
-                    listSearchRemainingTimeLabel.setText("剩余时间: 已完成");
+                    listSearchProgressBar.setString(getString("progress.totalComplete", totalSeeds, totalSeeds));
+                    listSearchCurrentSeedProgressLabel.setText(getString("currentSeed.complete"));
+                    listSearchElapsedTimeLabel.setText(getString("elapsedTime", formatTime(finalElapsedMs)));
+                    listSearchRemainingTimeLabel.setText(getString("remainingTime.completed"));
                 });
             }).start();
 
         } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(this, "请输入有效的数字", "错误", JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(this, getString("error.invalidNumber"), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
         }
     }
 
@@ -1894,13 +2252,13 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             // 恢复（线程数变化会在startListSearch中处理）
             listSearcher.resume();
             isListSearchPaused = false;
-            listSearchPauseButton.setText("暂停");
+            listSearchPauseButton.setText(getString("button.pause"));
             listSearchThreadCountField.setEnabled(false); // 恢复后不能修改线程数
         } else {
             // 暂停
             listSearcher.pause();
             isListSearchPaused = true;
-            listSearchPauseButton.setText("继续");
+            listSearchPauseButton.setText(getString("button.resume"));
             listSearchThreadCountField.setEnabled(true); // 暂停时可以修改线程数
         }
     }
@@ -1913,7 +2271,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         isListSearchPaused = false;
         listSearchStartButton.setEnabled(true);
         listSearchPauseButton.setEnabled(false);
-        listSearchPauseButton.setText("暂停");
+                listSearchPauseButton.setText(getString("button.pause"));
         listSearchStopButton.setEnabled(false);
         listSearchResetButton.setEnabled(true);
         listSearchSeedFileButton.setEnabled(true);
@@ -1925,8 +2283,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         listMinZField.setEnabled(true);
         listMaxZField.setEnabled(true);
         listSearchCheckGenerationCheckBox.setEnabled(true);
-        listSearchCurrentSeedProgressLabel.setText("当前种子: -/-，进度: 0.00%");
-        listSearchRemainingTimeLabel.setText("剩余时间: 已停止");
+        listSearchCurrentSeedProgressLabel.setText(getString("currentSeed.default"));
+        listSearchRemainingTimeLabel.setText(getString("remainingTime.stopped"));
     }
 
     private void resetListSearchToDefaults() {
@@ -1994,7 +2352,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             this.y = y;
             this.z = z;
             this.originalLine = originalLine;
-            this.canGenerate = !originalLine.contains("×");
+            this.canGenerate = !originalLine.contains("x");
         }
         
         // 计算到原点的距离的平方（x² + z²），用于排序
@@ -2125,23 +2483,23 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     
     private void exportListSearchResults() {
         if (listSearchResultArea.getText().trim().isEmpty()) {
-            JOptionPane.showMessageDialog(this, "没有结果可导出", "提示", JOptionPane.INFORMATION_MESSAGE);
+            JOptionPane.showMessageDialog(this, getString("error.noResultsToExport"), getString("prompt.information"), JOptionPane.INFORMATION_MESSAGE);
             return;
         }
 
         JFileChooser fileChooser = new JFileChooser();
-        fileChooser.setDialogTitle("导出搜索结果");
-        fileChooser.setFileFilter(new FileNameExtensionFilter("文本文件 (*.txt)", "txt"));
-        fileChooser.setSelectedFile(new File("search_output.txt"));
+        fileChooser.setDialogTitle(getString("dialog.exportResults"));
+        fileChooser.setFileFilter(new FileNameExtensionFilter(getString("dialog.textFiles"), "txt"));
+        fileChooser.setSelectedFile(new File(getString("file.searchOutput")));
 
         int result = fileChooser.showSaveDialog(this);
         if (result == JFileChooser.APPROVE_OPTION) {
             File file = fileChooser.getSelectedFile();
             try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
                 writer.print(listSearchResultArea.getText());
-                JOptionPane.showMessageDialog(this, "导出成功！", "成功", JOptionPane.INFORMATION_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("success.export"), getString("prompt.success"), JOptionPane.INFORMATION_MESSAGE);
             } catch (IOException e) {
-                JOptionPane.showMessageDialog(this, "导出失败: " + e.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.exportFailed", e.getMessage()), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
             }
         }
     }
@@ -2149,7 +2507,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     // 导出种子列表（不含/tp坐标）
     private void exportSeedList() {
         if (listSearchResultArea.getText().trim().isEmpty()) {
-            JOptionPane.showMessageDialog(this, "没有结果可导出", "提示", JOptionPane.INFORMATION_MESSAGE);
+            JOptionPane.showMessageDialog(this, getString("error.noResultsToExport"), getString("prompt.information"), JOptionPane.INFORMATION_MESSAGE);
             return;
         }
 
@@ -2179,14 +2537,14 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         }
         
         if (seeds.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "没有找到种子", "提示", JOptionPane.INFORMATION_MESSAGE);
+            JOptionPane.showMessageDialog(this, getString("error.noSeedsFound"), getString("prompt.information"), JOptionPane.INFORMATION_MESSAGE);
             return;
         }
 
         JFileChooser fileChooser = new JFileChooser();
-        fileChooser.setDialogTitle("导出种子列表");
-        fileChooser.setFileFilter(new FileNameExtensionFilter("文本文件 (*.txt)", "txt"));
-        fileChooser.setSelectedFile(new File("seed_list.txt"));
+        fileChooser.setDialogTitle(getString("dialog.exportSeedList"));
+        fileChooser.setFileFilter(new FileNameExtensionFilter(getString("dialog.textFiles"), "txt"));
+        fileChooser.setSelectedFile(new File(getString("file.seedList")));
 
         int result = fileChooser.showSaveDialog(this);
         if (result == JFileChooser.APPROVE_OPTION) {
@@ -2195,9 +2553,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 for (Long seed : seeds) {
                     writer.println(seed);
                 }
-                JOptionPane.showMessageDialog(this, "导出成功！共导出 " + seeds.size() + " 个种子", "成功", JOptionPane.INFORMATION_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("success.exportSeeds", seeds.size()), getString("prompt.success"), JOptionPane.INFORMATION_MESSAGE);
             } catch (IOException e) {
-                JOptionPane.showMessageDialog(this, "导出失败: " + e.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, getString("error.exportFailed", e.getMessage()), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
             }
         }
     }
