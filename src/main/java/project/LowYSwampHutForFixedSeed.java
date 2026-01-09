@@ -1353,7 +1353,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     }
 
     private void exportSearchResults() {
-        if (searchResultArea.getText().trim().isEmpty()) {
+        String resultText = searchResultArea.getText();
+        if (resultText.trim().isEmpty()) {
             JOptionPane.showMessageDialog(this, getString("error.noResultsToExport"), getString("prompt.information"), JOptionPane.INFORMATION_MESSAGE);
             return;
         }
@@ -1367,7 +1368,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         if (result == JFileChooser.APPROVE_OPTION) {
             File file = fileChooser.getSelectedFile();
             try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
-                writer.print(searchResultArea.getText());
+                // 导出所有结果，包括带有"x"标记的无法生成的结果
+                writer.print(resultText);
                 JOptionPane.showMessageDialog(this, getString("success.export"), getString("prompt.success"), JOptionPane.INFORMATION_MESSAGE);
             } catch (IOException e) {
                 JOptionPane.showMessageDialog(this, getString("error.exportFailed", e.getMessage()), getString("prompt.error"), JOptionPane.ERROR_MESSAGE);
