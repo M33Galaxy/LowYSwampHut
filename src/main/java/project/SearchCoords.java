@@ -335,7 +335,7 @@ public class SearchCoords {
 
         @Override
         public String toString() {
-            return String.format("/tp %d %.2f %d", x, height, z);
+            return String.format("/tp %d %.0f %d", x, height, z);
         }
     }
 
@@ -387,7 +387,7 @@ public class SearchCoords {
                 }
             }
         }
-        double height = ((double) totalheight / 63) + 2;
+        int height = (int) Math.ceil(((double) totalheight / 63) + 1);
         checker.clearMemory();
         return new Result(x, z, height);
     }
