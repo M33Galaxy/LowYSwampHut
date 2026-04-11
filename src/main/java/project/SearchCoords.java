@@ -5,7 +5,6 @@ import com.seedfinding.mccore.util.pos.CPos;
 import com.seedfinding.mccore.version.MCVersion;
 import com.seedfinding.mcfeature.structure.SwampHut;
 import net.minecraft.block.Blocks;
-import net.minecraft.util.math.Box;
 import nl.jellejurre.seedchecker.SeedChecker;
 import nl.jellejurre.seedchecker.SeedCheckerDimension;
 import nl.jellejurre.seedchecker.TargetState;
@@ -271,9 +270,8 @@ public class SearchCoords {
                 CHEESE_CACHE.set(new CheeseNoiseCache(seed));
                 SEED_CHECKER.set(SeedCheckerFactory.create(seed, TargetState.NO_STRUCTURES, SeedCheckerDimension.OVERWORLD, worldPresetMode));
             }
-            // 将maxHeight转换为int，用于Box和check方法
+            // 将 maxHeight 转为 int，供 check(...) 使用
             int maxHeightInt = (int) maxHeight;
-            int expectedAirCount = 128 - (int) maxHeight;
 
             for (int x = startX; x < endX && isRunning; x++) {
                 for (int z = minZ; z < maxZ && isRunning; z++) {
@@ -290,64 +288,71 @@ public class SearchCoords {
                         break;
                     }
                     CPos pos = swampHut.getInRegion(seed, x, z, rand);
-                    // 检查噪声和群系条件
+                    // 阶段1：检查噪声和群系条件
                     if (!SearchCoords.this.check(seed, 16 * pos.getX() + 3, 16 * pos.getZ() + 3, maxHeightInt)) {
                         // 更新进度计数器
                         processedCount.incrementAndGet();
                         continue;
                     }
-                    try {
-                        // 计算该点的实际高度
-                        SeedChecker checker = SeedCheckerFactory.create(seed, TargetState.NO_STRUCTURES, SeedCheckerDimension.OVERWORLD, worldPresetMode);
-                        Box box = new Box(16 * pos.getX() + 3, maxHeightInt, 16 * pos.getZ() + 3,
-                                16 * pos.getX() + 4, 128, 16 * pos.getZ() + 4);
-                        if (checker.getBlockCountInBox(Blocks.AIR, box) != expectedAirCount) {
-                            checker.clearMemory();
-                            continue;
-                        }
-                        // 优先使用真实生成的小屋最低Y（地板Y-1），未生成时再回退到地形估算高度
-                        int hutX = 16 * pos.getX();
-                        int hutZ = 16 * pos.getZ();
-                        Integer generatedFloorY = findGeneratedHutFloorY(seed, hutX, hutZ, worldPresetMode);
-                        Result result = generatedFloorY != null
-                                ? new Result(hutX, hutZ, generatedFloorY - 1)
-                                : checkHeight(seed, hutX, hutZ, mcVersion, worldPresetMode);
-
-                        // 只有当高度 <= maxHeight 时才输出
-                        if (!(result.height <= maxHeight)) {
-                            checker.clearMemory();
-                            continue;
-                        }
-                        if (worldPresetMode == WorldPresetMode.LARGE_BIOMES
-                                && generatedFloorY == null) {
-                            checker.clearMemory();
-                            continue;
-                        }
-                        // 如果开启了精确检查，检查女巫小屋是否可以生成
-                        String resultStr = result.toString();
-                        if (checkGeneration && generatedFloorY == null) {
-                            resultStr += " x";
-                        }
-                        synchronized (results) {
-                            results.add(resultStr);
-                        }
-                        if (resultCallback != null) {
-                            resultCallback.accept(resultStr);
-                        }
-                        checker.clearMemory();
-                    } catch (NoClassDefFoundError | ExceptionInInitializerError e) {
-                        // 如果 SeedChecker 初始化失败（通常是 log4j 问题），跳过这个坐标
-                        // 这不应该阻止程序继续运行
-                        if (e.getCause() != null && e.getCause().getMessage() != null && e.getCause().getMessage().contains("No class provided")) {
-                            // 这是 log4j 的调用者查找问题，跳过这个坐标
-                            continue;
-                        }
-                        throw e;
+                    // 阶段2：精确检查未生成结构时每一点的地表高度
+                    int hutX = 16 * pos.getX();
+                    int hutZ = 16 * pos.getZ();
+                    Result estimated = checkHeight(seed, hutX, hutZ, mcVersion, worldPresetMode);
+                    if (!(estimated.height <= maxHeight)) {
+                        processedCount.incrementAndGet();
+                        continue;
+                    }
+                    // 阶段3：真实生成后直接判断小屋是否生成以及真实生成高度并输出结果
+                    if (worldPresetMode == WorldPresetMode.SINGLE_BIOME || !checkGeneration) { // 单群系或未勾选精确检查生成跳过最后一步检查直接输出
+                        emitResultLine(estimated.toString(), resultCallback);
+                    } else {
+                        tryCheckHeightByRealGen(pos, estimated, resultCallback);
                     }
                 }
                 // 更新进度计数器
                 processedCount.incrementAndGet();
             }
+        }
+
+        private void emitResultLine(String resultStr, Consumer<String> resultCallback) {
+            synchronized (results) {
+                results.add(resultStr);
+            }
+            if (resultCallback != null) {
+                resultCallback.accept(resultStr);
+            }
+        }
+
+        private void tryCheckHeightByRealGen(CPos pos, Result estimatedHeight, Consumer<String> resultCallback) {
+            try {
+                checkHeightByRealGen(pos, estimatedHeight, resultCallback);
+            } catch (NoClassDefFoundError | ExceptionInInitializerError e) {
+                // 如果 SeedChecker 初始化失败（通常是 log4j 问题），跳过这个坐标，这不应该阻止程序继续运行
+                if (e.getCause() != null && e.getCause().getMessage() != null && e.getCause().getMessage().contains("No class provided")) {
+                    // 这是 log4j 的调用者查找问题，跳过这个坐标
+                    return;
+                }
+                throw e;
+            }
+        }
+
+        // 仅在精确检查生成且非单群系时执行最后的精确生成检查：判断是否生成并微调小屋最终高度
+        private void checkHeightByRealGen(CPos pos, Result estimatedHeight, Consumer<String> resultCallback) {
+            int hutX = 16 * pos.getX();
+            int hutZ = 16 * pos.getZ();
+            Integer generatedFloorY = findGeneratedHutFloorY(seed, hutX, hutZ, worldPresetMode);
+            String resultStr;
+            if (generatedFloorY == null) {
+                resultStr = estimatedHeight.toString() + " x";
+            } else {
+                double actualHeight = generatedFloorY - 1;
+                if (Double.compare(estimatedHeight.height(), actualHeight) != 0) {
+                    resultStr = new Result(hutX, hutZ, actualHeight).toString();
+                } else {
+                    resultStr = estimatedHeight.toString();
+                }
+            }
+            emitResultLine(resultStr, resultCallback);
         }
     }
 
@@ -361,15 +366,10 @@ public class SearchCoords {
         }
     }
 
-    // 检查女巫小屋是否可以生成（检查云杉木板）
-    public static boolean checkHutGeneration(long seed, int hutX, int hutZ, double maxHeight, WorldPresetMode worldPresetMode) {
-        return findGeneratedHutFloorY(seed, hutX, hutZ, worldPresetMode) != null;
-    }
-
     public static Integer findGeneratedHutFloorY(long seed, int hutX, int hutZ, WorldPresetMode worldPresetMode) {
         SeedChecker checker = SeedCheckerFactory.create(seed, TargetState.STRUCTURES, SeedCheckerDimension.OVERWORLD, worldPresetMode);
         try {
-            for (int y = -64; y <= 200; y++) {
+            for (int y = -55; y <= 128; y++) {
                 if (checker.getBlock(hutX + 2, y, hutZ + 2) == Blocks.SPRUCE_PLANKS) {
                     return y;
                 }
@@ -380,7 +380,7 @@ public class SearchCoords {
         }
     }
 
-    // 估算女巫小屋所在区域的地形高度，用作未生成结构时的回退值
+    // 精确检查女巫小屋所在区域的地形高度(未生成结构时)
     public static Result checkHeight(long seed, int x, int z, MCVersion mcVersion, WorldPresetMode worldPresetMode) {
         long structureSeed = seed & 281474976710655L;
         ChunkRand rand = new ChunkRand();
@@ -428,24 +428,27 @@ public class SearchCoords {
                 NOISE_CACHE.set(cache);
             }
         }
-        double erosionSample = cache.erosion.sample((double) x / 4, 0, (double) z / 4);
-        if (erosionSample < 0.55) {
-            return false;
-        }
-        double temperature = cache.temperature.sample((double) x / 4, 0, (double) z / 4);
-        // 1.18.2版本只检查温度不能小于-0.45，其他版本检查温度不能小于-0.45且不能大于0.2
-        if (mcVersion == MCVersion.v1_18_2) {
-            if (temperature < -0.45) {
+        boolean isSingleBiome = worldPresetMode == WorldPresetMode.SINGLE_BIOME;
+        if (!isSingleBiome) { // 检查群系
+            double erosionSample = cache.erosion.sample((double) x / 4, 0, (double) z / 4);
+            if (erosionSample < 0.55) {
                 return false;
             }
-        } else {
-            if (temperature > 0.2 || temperature < -0.45) {
+            double temperature = cache.temperature.sample((double) x / 4, 0, (double) z / 4);
+            // 1.18.2版本只检查温度不能小于-0.45，其他版本检查温度不能小于-0.45且不能大于0.2
+            if (mcVersion == MCVersion.v1_18_2) {
+                if (temperature < -0.45) {
+                    return false;
+                }
+            } else {
+                if (temperature > 0.2 || temperature < -0.45) {
+                    return false;
+                }
+            }
+            double ridge = cache.ridge.sample((double) x / 4, 0, (double) z / 4);
+            if ((ridge > 0.46 && ridge < 0.88) || (ridge < -0.46 && ridge > -0.88)) {
                 return false;
             }
-        }
-        double ridge = cache.ridge.sample((double) x / 4, 0, (double) z / 4);
-        if ((ridge > 0.46 && ridge < 0.88) || (ridge < -0.46 && ridge > -0.88)) {
-            return false;
         }
         if (Entrance(seed, x, 50, z, currentNeedCache) >= 0) {
             return false;
@@ -471,7 +474,7 @@ public class SearchCoords {
                 return false;
             }
         }
-        if (cache.continentalness.sample((double) x / 4, 0, (double) z / 4) < -0.11) {
+        if (!isSingleBiome && cache.continentalness.sample((double) x / 4, 0, (double) z / 4) < -0.11) { // 检查大陆性
             return false;
         }
         LazyDoublePerlinNoiseSampler aquiferNoise = LazyDoublePerlinNoiseSampler.createNoiseSampler(

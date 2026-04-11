@@ -2,5 +2,6 @@ package project;
 
 public enum WorldPresetMode {
     NORMAL,
-    LARGE_BIOMES
+    LARGE_BIOMES,
+    SINGLE_BIOME
 }

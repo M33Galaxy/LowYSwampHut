@@ -5,14 +5,11 @@ import com.seedfinding.mccore.version.MCVersion;
 import javax.swing.*;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.*;
+import java.awt.event.ItemEvent;
 import java.io.*;
-import java.util.ArrayList;
+import java.util.*;
 import java.util.List;
-import java.util.Map;
-import java.util.HashMap;
 import java.util.function.Consumer;
-import java.util.Locale;
-import java.util.ResourceBundle;
 import java.text.MessageFormat;
 
 public class LowYSwampHutForFixedSeed extends JFrame {
@@ -292,6 +289,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.weightx = 1.0;
         worldPresetComboBox = new JComboBox<>(getWorldPresetOptions());
         worldPresetComboBox.setSelectedIndex(0);
+        worldPresetComboBox.addItemListener(e -> {
+            if (e.getStateChange() == ItemEvent.SELECTED) {
+                updateSingleSeedPreciseGenerationCheckUi();
+            }
+        });
         inputPanel.add(worldPresetComboBox, gbc);
 
         // MinX 输入
@@ -386,6 +388,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         searchCheckGenerationCheckBox.setSelected(true); // 默认选中
         searchCheckGenerationCheckBox.setFont(getLoadedFont());
         inputPanel.add(searchCheckGenerationCheckBox, gbc);
+        updateSingleSeedPreciseGenerationCheckUi();
 
         // 语言选择下拉框
         gbc.gridx = 0;
@@ -631,7 +634,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 maxXField.setEnabled(true);
                 minZField.setEnabled(true);
                 maxZField.setEnabled(true);
-                searchCheckGenerationCheckBox.setEnabled(true);
+                updateSingleSeedPreciseGenerationCheckUi();
                 if (languageComboBox != null) {
                     languageComboBox.setEnabled(true);
                 }
@@ -786,22 +789,19 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                     int minZ = Integer.parseInt(minZField.getText().trim());
                     int maxZ = Integer.parseInt(maxZField.getText().trim());
 
-                    boolean checkGeneration = searchCheckGenerationCheckBox.isSelected();
+                    boolean checkGeneration = isSingleSeedPreciseGenerationCheckEffective();
                     searcher.startSearch(seed, threadCount, minX, maxX, minZ, maxZ, maxHeight,
                             this::updateSearchProgress, this::addSearchResult, checkGeneration);
 
                     lastSearchThreadCount = threadCount;
-                    searchPauseButton.setText(getString("button.pause"));
-                    searchThreadCountField.setEnabled(false);
-                    return;
                 } else {
                     // 线程数没变化，直接恢复
                     searcher.resume();
                     isSearchPaused = false;
-                    searchPauseButton.setText(getString("button.pause"));
-                    searchThreadCountField.setEnabled(false);
-                    return;
                 }
+                searchPauseButton.setText(getString("button.pause"));
+                searchThreadCountField.setEnabled(false);
+                return;
             } catch (NumberFormatException e) {
                 JOptionPane.showMessageDialog(this,
                         "线程数格式错误，无法继续",
@@ -999,7 +999,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             maxXField.setEnabled(false);
             minZField.setEnabled(false);
             maxZField.setEnabled(false);
-            searchCheckGenerationCheckBox.setEnabled(false);
+            updateSingleSeedPreciseGenerationCheckUi();
             if (languageComboBox != null) {
                 languageComboBox.setEnabled(false);
             }
@@ -1015,7 +1015,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             WorldPresetMode worldPresetMode = getWorldPresetMode((String) worldPresetComboBox.getSelectedItem());
 
             searcher = new SearchCoords(mcVersion, worldPresetMode);
-            boolean checkGeneration = searchCheckGenerationCheckBox.isSelected();
+            boolean checkGeneration = isSingleSeedPreciseGenerationCheckEffective();
             searcher.startSearch(seed, threadCount, minX, maxX, minZ, maxZ, maxHeight, this::updateSearchProgress, this::addSearchResult, checkGeneration);
 
         } catch (NumberFormatException e) {
@@ -1063,7 +1063,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         maxXField.setEnabled(true);
         minZField.setEnabled(true);
         maxZField.setEnabled(true);
-        searchCheckGenerationCheckBox.setEnabled(true);
+        updateSingleSeedPreciseGenerationCheckUi();
         if (languageComboBox != null) {
             languageComboBox.setEnabled(true);
         }
@@ -1173,6 +1173,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.weightx = 1.0;
         listWorldPresetComboBox = new JComboBox<>(getWorldPresetOptions());
         listWorldPresetComboBox.setSelectedIndex(0);
+        listWorldPresetComboBox.addItemListener(e -> {
+            if (e.getStateChange() == ItemEvent.SELECTED) {
+                updateListSearchPreciseGenerationCheckUi();
+            }
+        });
         inputPanel.add(listWorldPresetComboBox, gbc);
 
         // MinX 输入
@@ -1266,6 +1271,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         listSearchCheckGenerationCheckBox.setSelected(true); // 默认选中
         listSearchCheckGenerationCheckBox.setFont(getLoadedFont());
         inputPanel.add(listSearchCheckGenerationCheckBox, gbc);
+        updateListSearchPreciseGenerationCheckUi();
 
         // 按钮区域
         JPanel buttonPanel = new JPanel(new FlowLayout());
@@ -1414,7 +1420,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 maxXField.setEnabled(true);
                 minZField.setEnabled(true);
                 maxZField.setEnabled(true);
-                searchCheckGenerationCheckBox.setEnabled(true);
+                updateSingleSeedPreciseGenerationCheckUi();
                 if (languageComboBox != null) {
                     languageComboBox.setEnabled(true);
                 }
@@ -1565,14 +1571,75 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     }
 
     private String[] getWorldPresetOptions() {
-        return new String[]{getString("worldPreset.normal"), getString("worldPreset.largeBiomes")};
+        return new String[]{getString("worldPreset.normal"), getString("worldPreset.largeBiomes"), getString("worldPreset.singleBiome")};
     }
 
     private WorldPresetMode getWorldPresetMode(String presetLabel) {
         if (presetLabel != null && presetLabel.equals(getString("worldPreset.largeBiomes"))) {
             return WorldPresetMode.LARGE_BIOMES;
         }
+        if (presetLabel != null && presetLabel.equals(getString("worldPreset.singleBiome"))) {
+            return WorldPresetMode.SINGLE_BIOME;
+        }
         return WorldPresetMode.NORMAL;
+    }
+
+    private void updateSingleSeedPreciseGenerationCheckUi() {
+        if (searchCheckGenerationCheckBox == null || worldPresetComboBox == null) {
+            return;
+        }
+        boolean singleBiome = getWorldPresetMode((String) worldPresetComboBox.getSelectedItem()) == WorldPresetMode.SINGLE_BIOME;
+        if (singleBiome) {
+            searchCheckGenerationCheckBox.setSelected(false);
+            searchCheckGenerationCheckBox.setEnabled(false);
+            if (searchCheckGenerationLabel != null) {
+                searchCheckGenerationLabel.setEnabled(false);
+            }
+        } else {
+            if (searchCheckGenerationLabel != null) {
+                searchCheckGenerationLabel.setEnabled(true);
+            }
+            searchCheckGenerationCheckBox.setEnabled(!isSearchRunning);
+        }
+    }
+
+    private void updateListSearchPreciseGenerationCheckUi() {
+        if (listSearchCheckGenerationCheckBox == null || listWorldPresetComboBox == null) {
+            return;
+        }
+        boolean singleBiome = getWorldPresetMode((String) listWorldPresetComboBox.getSelectedItem()) == WorldPresetMode.SINGLE_BIOME;
+        if (singleBiome) {
+            listSearchCheckGenerationCheckBox.setSelected(false);
+            listSearchCheckGenerationCheckBox.setEnabled(false);
+            if (listSearchCheckGenerationLabel != null) {
+                listSearchCheckGenerationLabel.setEnabled(false);
+            }
+        } else {
+            if (listSearchCheckGenerationLabel != null) {
+                listSearchCheckGenerationLabel.setEnabled(true);
+            }
+            listSearchCheckGenerationCheckBox.setEnabled(!isListSearchRunning);
+        }
+    }
+
+    private boolean isSingleSeedPreciseGenerationCheckEffective() {
+        if (worldPresetComboBox == null) {
+            return false;
+        }
+        if (getWorldPresetMode((String) worldPresetComboBox.getSelectedItem()) == WorldPresetMode.SINGLE_BIOME) {
+            return false;
+        }
+        return searchCheckGenerationCheckBox != null && searchCheckGenerationCheckBox.isSelected();
+    }
+
+    private boolean isListSearchPreciseGenerationCheckEffective() {
+        if (listWorldPresetComboBox == null) {
+            return false;
+        }
+        if (getWorldPresetMode((String) listWorldPresetComboBox.getSelectedItem()) == WorldPresetMode.SINGLE_BIOME) {
+            return false;
+        }
+        return listSearchCheckGenerationCheckBox != null && listSearchCheckGenerationCheckBox.isSelected();
     }
 
     /**
@@ -1725,6 +1792,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             worldPresetComboBox.setModel(new DefaultComboBoxModel<>(getWorldPresetOptions()));
             worldPresetComboBox.setSelectedIndex(Math.max(0, selectedIndex));
         }
+        updateSingleSeedPreciseGenerationCheckUi();
 
         // 更新进度条和标签
         if (searchProgressBar != null && !isSearchRunning) {
@@ -1804,6 +1872,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             listWorldPresetComboBox.setModel(new DefaultComboBoxModel<>(getWorldPresetOptions()));
             listWorldPresetComboBox.setSelectedIndex(Math.max(0, selectedIndex));
         }
+        updateListSearchPreciseGenerationCheckUi();
         if (listSearchSeedFileButton != null) {
             listSearchSeedFileButton.setText(getString("button.selectFile"));
         }
@@ -1950,7 +2019,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 listMaxXField.setEnabled(true);
                 listMinZField.setEnabled(true);
                 listMaxZField.setEnabled(true);
-                listSearchCheckGenerationCheckBox.setEnabled(true);
+                updateListSearchPreciseGenerationCheckUi();
                 listSearchResultArea.setText("");
                 listSearchProgressBar.setValue(0);
                 listSearchProgressBar.setString(getString("progress.total", 0, 0, 0.0));
@@ -2039,26 +2108,15 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                     if (listSearcher == null || !listSearcher.getMCVersion().equals(mcVersion) || listSearcher.getWorldPresetMode() != worldPresetMode) {
                         listSearcher = new SearchCoords(mcVersion, worldPresetMode);
                     }
-
-                    // 批量处理模式下，暂停/恢复功能简化处理
-                    // 直接恢复当前种子的搜索
-                    if (listSearcher != null) {
-                        listSearcher.resume();
-                    }
-                    isListSearchPaused = false;
-                    listSearchPauseButton.setText(getString("button.pause"));
-                    listSearchThreadCountField.setEnabled(false);
-                    return;
-                } else {
-                    // 线程数没变化，直接恢复
-                    if (listSearcher != null) {
-                        listSearcher.resume();
-                    }
-                    isListSearchPaused = false;
-                    listSearchPauseButton.setText(getString("button.pause"));
-                    listSearchThreadCountField.setEnabled(false);
-                    return;
                 }
+                // 恢复
+                if (listSearcher != null) {
+                    listSearcher.resume();
+                }
+                isListSearchPaused = false;
+                listSearchPauseButton.setText(getString("button.pause"));
+                listSearchThreadCountField.setEnabled(false);
+                return;
             } catch (NumberFormatException e) {
                 JOptionPane.showMessageDialog(this,
                         getString("error.threadCountFormatErrorContinue"),
@@ -2237,7 +2295,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             listMaxXField.setEnabled(false);
             listMinZField.setEnabled(false);
             listMaxZField.setEnabled(false);
-            listSearchCheckGenerationCheckBox.setEnabled(false);
+            updateListSearchPreciseGenerationCheckUi();
             listSearchResultArea.setText("");
             listSearchProgressBar.setValue(0);
             listSearchProgressBar.setString(getString("progress.total", 0, 0, 0.0));
@@ -2333,12 +2391,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                     seedResults.put(seed, new ArrayList<>());
 
                     listSearcher = new SearchCoords(mcVersion, worldPresetMode);
-                    final long currentSeed = seed;
 
                     // 创建结果回调，按种子分组
-                    Consumer<String> seedResultCallback = result -> {
-                        seedResults.get(currentSeed).add(result);
-                    };
+                    Consumer<String> seedResultCallback = result -> seedResults.get(seed).add(result);
 
                     // 创建进度回调，更新当前种子的进度
                     Consumer<SearchCoords.ProgressInfo> seedProgressCallback = info -> {
@@ -2376,7 +2431,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                     };
 
                     // 检查当前种子对应区域有无满足条件的女巫小屋
-                    boolean checkGeneration = listSearchCheckGenerationCheckBox.isSelected();
+                    boolean checkGeneration = isListSearchPreciseGenerationCheckEffective();
                     listSearcher.startSearch(seed, finalThreadCount, minX, maxX, minZ, maxZ, maxHeight,
                             seedProgressCallback, seedResultCallback, checkGeneration);
 
@@ -2461,7 +2516,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                     listMaxXField.setEnabled(true);
                     listMinZField.setEnabled(true);
                     listMaxZField.setEnabled(true);
-                    listSearchCheckGenerationCheckBox.setEnabled(true);
+                    updateListSearchPreciseGenerationCheckUi();
                     listSearchProgressBar.setValue((int) totalSeeds);
                     listSearchProgressBar.setString(getString("progress.totalComplete", totalSeeds, totalSeeds));
                     listSearchCurrentSeedProgressLabel.setText(getString("currentSeed.complete"));
@@ -2515,7 +2570,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         listMaxXField.setEnabled(true);
         listMinZField.setEnabled(true);
         listMaxZField.setEnabled(true);
-        listSearchCheckGenerationCheckBox.setEnabled(true);
+        updateListSearchPreciseGenerationCheckUi();
     }
 
     private void resetListSearchToDefaults() {
@@ -2627,8 +2682,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         }
 
         // 按最低y值排序（从低到高）
-        validSeedYList.sort((a, b) -> Double.compare(a.getValue(), b.getValue()));
-        invalidSeedYList.sort((a, b) -> Double.compare(a.getValue(), b.getValue()));
+        validSeedYList.sort(Comparator.comparingDouble(Map.Entry::getValue));
+        invalidSeedYList.sort(Comparator.comparingDouble(Map.Entry::getValue));
 
         // 重新构建结果文本：先可生成的种子，后无法生成的种子
         StringBuilder sb = new StringBuilder();
@@ -2687,8 +2742,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         }
 
         // 按距离排序（从近到远，即从小到大）
-        validSeedDistanceList.sort((a, b) -> Double.compare(a.getValue(), b.getValue()));
-        invalidSeedDistanceList.sort((a, b) -> Double.compare(a.getValue(), b.getValue()));
+        validSeedDistanceList.sort(Comparator.comparingDouble(Map.Entry::getValue));
+        invalidSeedDistanceList.sort(Comparator.comparingDouble(Map.Entry::getValue));
 
         // 重新构建结果文本：先可生成的种子，后无法生成的种子
         StringBuilder sb = new StringBuilder();

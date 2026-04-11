@@ -3,7 +3,7 @@ plugins {
     id 'com.github.johnrengelman.shadow' version '8.1.1'
 }
 group 'org.example'
-version '1.2.0'
+version '1.3.0'
 repositories {
     mavenCentral()
     gradlePluginPortal()
@@ -40,6 +40,11 @@ test {
     useJUnitPlatform()
 }
 
+// 源文件为 UTF-8 时必须指定编码，否则 Windows 下 javac 默认 GBK 会破坏中文等字面量
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
 // 配置 Shadow JAR
 shadowJar {
     archiveBaseName.set('LowYSwampHut')
@@ -48,7 +53,7 @@ shadowJar {
 }
 
 // 创建 LowYSwampHutForFixedSeed 的可执行 JAR
-task buildMainJar(type: com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar) {
+tasks.register('buildMainJar', com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar) {
     group = 'build'
     description = 'Creates a fat JAR for LowYSwampHutForFixedSeed'
     archiveBaseName.set('LowYSwampHutForFixedSeedGUI')
@@ -70,7 +75,7 @@ task buildMainJar(type: com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJ
 }
 
 // 创建所有 JAR 的任务
-task buildAllJars {
+tasks.register('buildAllJars') {
     group = 'build'
     description = 'Builds all executable JARs'
     dependsOn buildMainJar

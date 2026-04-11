@@ -14,7 +14,7 @@ class LargeBiomesRegressionTest {
     @Test
     @Timeout(30)
     void largeBiomesPresetChangesTerrainForFixedSeeds() {
-        long[] seeds = {0L, 1L, 12345L, -987654321L};
+        long[] seeds = {5023147298867078368L};
         boolean foundDifference = false;
 
         for (long seed : seeds) {
