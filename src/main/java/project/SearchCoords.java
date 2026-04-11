@@ -450,10 +450,10 @@ public class SearchCoords {
                 return false;
             }
         }
-        if (Entrance(seed, x, 50, z, currentNeedCache, worldPresetMode) >= 0) {
+        if (Entrance1(seed, x, 50, z, currentNeedCache, worldPresetMode) >= 0) {
             return false;
         }
-        if (Entrance(seed, x, 60, z, currentNeedCache, worldPresetMode) >= 0) {
+        if (Entrance1(seed, x, 60, z, currentNeedCache, worldPresetMode) >= 0) {
             return false;
         }
         // 检查maxHeight本身
@@ -559,6 +559,20 @@ public class SearchCoords {
         double q = (-0.05 + (-0.05 * cache.spaghettiRoughnessModulator.sample(x, y, z))) *
                 (-0.4 + Math.abs(cache.spaghettiRoughness.sample(x, y, z)));
         return Math.min(c, p + q);
+    }
+
+    public static double Entrance1(long worldSeed, int x, int y, int z, boolean needCache, WorldPresetMode worldPresetMode) {
+        NoiseCache cache;
+        if (needCache && NOISE_CACHE.get() != null) {
+            cache = NOISE_CACHE.get();
+        } else {
+            cache = new NoiseCache(worldSeed, worldPresetMode);
+            if (needCache) {
+                NOISE_CACHE.set(cache);
+            }
+        }
+        return cache.caveEntrance.sample(x * 0.75, y * 0.5, z * 0.75) + 0.37 +
+                MathHelper.clampedLerp(0.3, 0.0, (10 + (double)y) / 40.0);
     }
 
     public static double Cheese(long worldSeed, int x, int y, int z, boolean needCache) {
