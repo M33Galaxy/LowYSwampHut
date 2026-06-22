@@ -7,10 +7,10 @@ import com.seedfinding.mccore.version.MCVersion;
  */
 public enum GameVersion {
     V26_2(MCVersion.v1_21, "26.2"),
-    V1_21_TO_26_1(MCVersion.v1_21, "1.21~26.1"),
-    V1_20_1(MCVersion.v1_20_1, "1.20-1.20.6"),
-    V1_19_2(MCVersion.v1_19_2, "1.19-1.19.4"),
-    V1_18_2(MCVersion.v1_18_2, "1.18-1.18.2");
+    V1_21_TO_26_1(MCVersion.v1_21, "1.21.x~26.1"),
+    V1_20_1(MCVersion.v1_20_1, "1.20.x"),
+    V1_19_2(MCVersion.v1_19_2, "1.19.x"),
+    V1_18_2(MCVersion.v1_18_2, "1.18.x");
 
     private final MCVersion mcVersion;
     private final String displayName;
@@ -38,19 +38,14 @@ public enum GameVersion {
             }
         }
         // 兼容旧版 UI 字符串
-        if ("1.21.1".equals(name)) {
-            return V1_21_TO_26_1;
-        }
-        if ("1.20.1".equals(name)) {
-            return V1_20_1;
-        }
-        if ("1.19.2".equals(name)) {
-            return V1_19_2;
-        }
-        if ("1.18.2".equals(name)) {
-            return V1_18_2;
-        }
-        return V1_21_TO_26_1;
+        return switch (name) {
+            case "26.2" -> V26_2;
+            case "1.21.1" -> V1_21_TO_26_1;
+            case "1.20.1" -> V1_20_1;
+            case "1.19.2" -> V1_19_2;
+            case "1.18.2" -> V1_18_2;
+            default -> V26_2;
+        };
     }
 
     public static String[] displayNames() {

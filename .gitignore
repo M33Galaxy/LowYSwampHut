@@ -27,6 +27,7 @@ out/
 .springBeans
 .sts4-cache
 bin/
+seedCheckerLib/
 !**/src/main/**/bin/
 !**/src/test/**/bin/
 
