@@ -179,9 +179,17 @@ public class SearchCoords {
             return;
         }
 
-        // 停止当前的executor
+        // 停止当前的 executor，并等待旧工作线程退出，避免与新建线程池并发争抢
         if (executor != null && !executor.isShutdown()) {
             executor.shutdownNow();
+            try {
+                if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
+                    return;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
         }
 
         // 更新线程数
@@ -261,44 +269,51 @@ public class SearchCoords {
             // 将 maxHeight 转为 int，供 check(...) 使用
             int maxHeightInt = (int) maxHeight;
 
-            for (int x = startX; x < endX && isRunning; x++) {
-                for (int z = minZ; z < maxZ && isRunning; z++) {
-                    // 暂停时等待
-                    while (isPaused && isRunning) {
+            try {
+                for (int x = startX; x < endX && isRunning; x++) {
+                    for (int z = minZ; z < maxZ && isRunning; z++) {
+                        // 暂停时等待
+                        while (isPaused && isRunning) {
+                            try {
+                                Thread.sleep(100);
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                return;
+                            }
+                        }
+                        if (!isRunning) {
+                            break;
+                        }
                         try {
-                            Thread.sleep(100);
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                            return;
+                            CPos pos = swampHut.getInRegion(seed, x, z, rand);
+                            // 阶段1：检查噪声和群系条件
+                            if (!SearchCoords.this.check(seed, 16 * pos.getX(), 16 * pos.getZ(), maxHeightInt)) {
+                                continue;
+                            }
+                            // 阶段2：精确检查未生成结构时每一点的地表高度
+                            int hutX = 16 * pos.getX();
+                            int hutZ = 16 * pos.getZ();
+                            Result estimated = checkHeight(seed, hutX, hutZ, mcVersion, worldPresetMode);
+                            if (!(estimated.height <= maxHeight)) {
+                                continue;
+                            }
+                            // 阶段3：真实生成后直接判断小屋是否生成以及真实生成高度并输出结果
+                            if (worldPresetMode == WorldPresetMode.SINGLE_BIOME || !checkGeneration) {
+                                emitResultLine(estimated.toString(), resultCallback);
+                            } else {
+                                tryCheckHeightByRealGen(pos, estimated, resultCallback);
+                            }
+                        } finally {
+                            processedCount.incrementAndGet();
                         }
                     }
-                    if (!isRunning) {
-                        break;
-                    }
-                    CPos pos = swampHut.getInRegion(seed, x, z, rand);
-                    // 阶段1：检查噪声和群系条件
-                    if (!SearchCoords.this.check(seed, 16 * pos.getX(), 16 * pos.getZ(), maxHeightInt)) {
-                        // 更新进度计数器
-                        processedCount.incrementAndGet();
-                        continue;
-                    }
-                    // 阶段2：精确检查未生成结构时每一点的地表高度
-                    int hutX = 16 * pos.getX();
-                    int hutZ = 16 * pos.getZ();
-                    Result estimated = checkHeight(seed, hutX, hutZ, mcVersion, worldPresetMode);
-                    if (!(estimated.height <= maxHeight)) {
-                        processedCount.incrementAndGet();
-                        continue;
-                    }
-                    // 阶段3：真实生成后直接判断小屋是否生成以及真实生成高度并输出结果
-                    if (worldPresetMode == WorldPresetMode.SINGLE_BIOME || !checkGeneration) { // 单群系或未勾选精确检查生成跳过最后一步检查直接输出
-                        emitResultLine(estimated.toString(), resultCallback);
-                    } else {
-                        tryCheckHeightByRealGen(pos, estimated, resultCallback);
-                    }
                 }
-                // 更新进度计数器
-                processedCount.incrementAndGet();
+            } finally {
+                ThreadSeedResources resources = THREAD_RESOURCES.get();
+                if (resources != null && resources.seed == seed && resources.worldPresetMode == worldPresetMode) {
+                    resources.clear();
+                    THREAD_RESOURCES.remove();
+                }
             }
         }
 
@@ -355,13 +370,18 @@ public class SearchCoords {
     }
 
     public static Integer findGeneratedHutFloorY(long seed, int hutX, int hutZ, WorldPresetMode worldPresetMode) {
-        SeedChecker checker = getThreadResources(seed, worldPresetMode).getStructureChecker();
-        for (int y = -55; y <= 128; y++) {
-            if (checker.getBlock(hutX + 2, y, hutZ + 2) == Blocks.SPRUCE_PLANKS) {
-                return y;
+        ThreadSeedResources resources = getThreadResources(seed, worldPresetMode);
+        SeedChecker checker = resources.getStructureChecker();
+        try {
+            for (int y = -55; y <= 128; y++) {
+                if (checker.getBlock(hutX + 2, y, hutZ + 2) == Blocks.SPRUCE_PLANKS) {
+                    return y;
+                }
             }
+            return null;
+        } finally {
+            checker.clearMemory();
         }
-        return null;
     }
 
     // 精确检查女巫小屋所在区域的地形高度(未生成结构时)
@@ -370,35 +390,40 @@ public class SearchCoords {
         ChunkRand rand = new ChunkRand();
         rand.setCarverSeed(structureSeed, x / 16, z / 16, mcVersion);
         float a = rand.nextFloat();
-        SeedChecker checker = getThreadResources(seed, worldPresetMode).terrainChecker;
-        int totalHeight = 0;
-        if (a < 0.25F || (a >= 0.5F && a < 0.75F)) {
-            for (int i = x; i < x + 7; i++) {
-                for (int j = z; j < z + 9; j++) {
-                    boolean checked = false;
-                    for (int k = 200; k >= -55 && !checked; k--) {
-                        if (!checker.getBlockState(i, k, j).isAir()) {
-                            checked = true;
-                            totalHeight += k;
+        ThreadSeedResources resources = getThreadResources(seed, worldPresetMode);
+        SeedChecker checker = resources.getTerrainChecker();
+        try {
+            int totalHeight = 0;
+            if (a < 0.25F || (a >= 0.5F && a < 0.75F)) {
+                for (int i = x; i < x + 7; i++) {
+                    for (int j = z; j < z + 9; j++) {
+                        boolean checked = false;
+                        for (int k = 200; k >= -55 && !checked; k--) {
+                            if (!checker.getBlockState(i, k, j).isAir()) {
+                                checked = true;
+                                totalHeight += k;
+                            }
+                        }
+                    }
+                }
+            } else {
+                for (int i = x; i < x + 9; i++) {
+                    for (int j = z; j < z + 7; j++) {
+                        boolean checked = false;
+                        for (int k = 200; k >= -55 && !checked; k--) {
+                            if (!checker.getBlockState(i, k, j).isAir()) {
+                                checked = true;
+                                totalHeight += k;
+                            }
                         }
                     }
                 }
             }
-        } else {
-            for (int i = x; i < x + 9; i++) {
-                for (int j = z; j < z + 7; j++) {
-                    boolean checked = false;
-                    for (int k = 200; k >= -55 && !checked; k--) {
-                        if (!checker.getBlockState(i, k, j).isAir()) {
-                            checked = true;
-                            totalHeight += k;
-                        }
-                    }
-                }
-            }
+            int height = (int) Math.ceil(((double) totalHeight / 63) + 1);
+            return new Result(x, z, height);
+        } finally {
+            checker.clearMemory();
         }
-        int height = (int) Math.ceil(((double) totalHeight / 63) + 1);
-        return new Result(x, z, height);
     }
 
     public boolean check(long seed, int x, int z, int maxHeight) {
@@ -484,15 +509,21 @@ public class SearchCoords {
         final long seed;
         final WorldPresetMode worldPresetMode;
         final WorldNoiseCache noise;
-        final SeedChecker terrainChecker;
+        private SeedChecker terrainChecker;
         private SeedChecker structureChecker;
 
         ThreadSeedResources(long seed, WorldPresetMode worldPresetMode) {
             this.seed = seed;
             this.worldPresetMode = worldPresetMode;
             this.noise = new WorldNoiseCache(seed, worldPresetMode);
-            this.terrainChecker = SeedCheckerFactory.create(
-                    seed, TargetState.NO_STRUCTURES, SeedCheckerDimension.OVERWORLD, worldPresetMode);
+        }
+
+        SeedChecker getTerrainChecker() {
+            if (terrainChecker == null) {
+                terrainChecker = SeedCheckerFactory.create(
+                        seed, TargetState.NO_STRUCTURES, SeedCheckerDimension.OVERWORLD, worldPresetMode);
+            }
+            return terrainChecker;
         }
 
         SeedChecker getStructureChecker() {
@@ -504,7 +535,9 @@ public class SearchCoords {
         }
 
         void clear() {
-            terrainChecker.clearMemory();
+            if (terrainChecker != null) {
+                terrainChecker.clearMemory();
+            }
             if (structureChecker != null) {
                 structureChecker.clearMemory();
             }
