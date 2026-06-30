@@ -22,13 +22,16 @@ import nl.kallestruik.noisesampler.minecraft.util.TerrainNoisePoint;
 import nl.kallestruik.noisesampler.minecraft.util.Util;
 import org.jetbrains.annotations.NotNull;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -57,10 +60,28 @@ public class SearchCoords {
     /** 小屋 footprint 列数（7×9） */
     private static final int HUT_FOOTPRINT_COLUMNS = 63;
 
+    /*
+     * SeedChecker 生成 chunk 时会启动额外的 CompletableFuture 工作。
+     * 限制外层线程池可以避免多个搜索线程同时保留完整的 chunk generation 邻域。
+     */
+    private static final int MAX_SEARCH_THREADS = boundedConcurrencyProperty(
+            "lowyswamphut.maxSearchThreads", 4);
+    private static final int MAX_CONCURRENT_REAL_GENERATIONS = boundedConcurrencyProperty(
+            "lowyswamphut.maxConcurrentRealGenerations", 2);
+    private static final int MAX_CHUNK_CACHE_SIZE = boundedChunkCacheSize(
+            "lowyswamphut.maxChunkCacheSize", 1024);
+    private static final int MAX_SEARCH_AXIS_SPAN = positiveIntProperty(
+            "lowyswamphut.maxSearchAxisSpan", 250_000);
+    private static final long MAX_SEARCH_ITERATIONS = positiveLongProperty(
+            "lowyswamphut.maxSearchIterations", 20_000_000_000L);
+    private static final Semaphore REAL_GENERATION_PERMITS =
+            new Semaphore(MAX_CONCURRENT_REAL_GENERATIONS, true);
+
     private final SwampHut swampHut;
     private final GameVersion gameVersion;
     private final MCVersion mcVersion;
     private final WorldPresetMode worldPresetMode;
+    private final SearchMetricsHook metricsHook;
     private ExecutorService executor;
     private Thread progressThread;
     private volatile boolean isRunning = false;
@@ -96,21 +117,34 @@ public class SearchCoords {
     }
 
     public SearchCoords(GameVersion gameVersion, WorldPresetMode worldPresetMode) {
+        this(gameVersion, worldPresetMode, SearchMetricsHook.NO_OP);
+    }
+
+    public SearchCoords(GameVersion gameVersion, WorldPresetMode worldPresetMode,
+                        SearchMetricsHook metricsHook) {
         this.gameVersion = gameVersion;
         this.mcVersion = gameVersion.getMcVersion();
         this.worldPresetMode = worldPresetMode;
         this.swampHut = new SwampHut(mcVersion);
+        this.metricsHook = metricsHook == null ? SearchMetricsHook.NO_OP : metricsHook;
     }
 
     public void startSearch(long seed, int threadCount, int minX, int maxX, int minZ, int maxZ, double maxHeight,
                             Consumer<ProgressInfo> progressCallback, Consumer<String> resultCallback, boolean checkGeneration) {
+        validateSearchBounds(minX, maxX, minZ, maxZ);
+        final int searchThreadCount = boundedThreadCount(threadCount);
         // 如果正在运行且处于暂停状态，且线程数变化，则调整线程数
-        if (isRunning && isPaused && threadCount != currentThreadCount) {
-            adjustThreadCount(threadCount, resultCallback, checkGeneration);
+        if (isRunning && isPaused && searchThreadCount != currentThreadCount) {
+            adjustThreadCount(searchThreadCount, resultCallback, checkGeneration);
             return;
         }
 
         if (isRunning) {
+            return;
+        }
+        // worker 提交后会立即调用 shutdown()，因此不能只依赖 isRunning
+        // 判断前一个线程池是否已经彻底退出。
+        if (executor != null && !executor.isTerminated()) {
             return;
         }
         isRunning = true;
@@ -126,7 +160,7 @@ public class SearchCoords {
         currentMinZ = minZ;
         currentMaxZ = maxZ;
         currentMaxHeight = maxHeight;
-        currentThreadCount = threadCount;
+        currentThreadCount = searchThreadCount;
         currentResultCallback = resultCallback;
         currentCheckGeneration = checkGeneration;
         currentStage = 1;
@@ -162,7 +196,7 @@ public class SearchCoords {
         // 协调线程：阶段1 → 排序 → 阶段2
         new Thread(() -> {
             try {
-                runPhase1(seed, threadCount, minX, maxX, minZ, maxZ, maxHeight, processedCount);
+                runPhase1(seed, searchThreadCount, minX, maxX, minZ, maxZ, maxHeight, processedCount);
                 if (!isRunning) {
                     return;
                 }
@@ -184,7 +218,7 @@ public class SearchCoords {
                 beginStage(2, sorted.size());
 
                 if (!sorted.isEmpty() && isRunning) {
-                    runPhase2(seed, threadCount, maxHeight, stage2Processed, resultCallback, checkGeneration);
+                    runPhase2(seed, searchThreadCount, maxHeight, stage2Processed, resultCallback, checkGeneration);
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -348,10 +382,11 @@ public class SearchCoords {
         if (newThreadCount < 1) {
             return;
         }
-
+        newThreadCount = boundedThreadCount(newThreadCount);
         currentThreadCount = newThreadCount;
         currentResultCallback = resultCallback;
         currentCheckGeneration = checkGeneration;
+        isRunning = true;
 
         if (currentStage == 1) {
             phase1AdjustPending = true;
@@ -453,30 +488,35 @@ public class SearchCoords {
 
         @Override
         public void run() {
-            int maxHeightInt = (int) maxHeight;
-            // 阶段1不清理 ThreadLocal，供同线程池进入阶段2时复用噪声缓存
-            for (int x = startX; x < endX && isRunning; x++) {
-                for (int z = minZ; z < maxZ && isRunning; z++) {
-                    waitIfPaused();
-                    if (!isRunning) {
-                        break;
-                    }
-                    try {
-                        CPos pos = swampHut.getInRegion(seed, x, z, rand);
-                        int hutX = 16 * pos.getX();
-                        int hutZ = 16 * pos.getZ();
-                        if (!SearchCoords.this.check(seed, hutX, hutZ, maxHeightInt)) {
-                            continue;
+            metricsHook.regionWorkerStarted();
+            try {
+                int maxHeightInt = (int) maxHeight;
+                // 阶段1不清理 ThreadLocal，供同线程池进入阶段2时复用噪声缓存
+                for (int x = startX; x < endX && isRunning; x++) {
+                    for (int z = minZ; z < maxZ && isRunning; z++) {
+                        waitIfPaused();
+                        if (!isRunning) {
+                            break;
                         }
-                        // 用 slopedCheese / 多点梯子预估地表，砍掉明显过高的候选，减少阶段2 SeedChecker 调用
-                        if (!passesDensityPrefilter(seed, hutX, hutZ, maxHeightInt, worldPresetMode)) {
-                            continue;
+                        try {
+                            CPos pos = swampHut.getInRegion(seed, x, z, rand);
+                            int hutX = 16 * pos.getX();
+                            int hutZ = 16 * pos.getZ();
+                            if (!SearchCoords.this.check(seed, hutX, hutZ, maxHeightInt)) {
+                                continue;
+                            }
+                            // 用 slopedCheese / 多点梯子预估地表，砍掉明显过高的候选，减少阶段2 SeedChecker 调用
+                            if (!passesDensityPrefilter(seed, hutX, hutZ, maxHeightInt, worldPresetMode)) {
+                                continue;
+                            }
+                            phase1Candidates.add(packChunkPos(pos.getX(), pos.getZ()));
+                        } finally {
+                            processedCount.incrementAndGet();
                         }
-                        phase1Candidates.add(packChunkPos(pos.getX(), pos.getZ()));
-                    } finally {
-                        processedCount.incrementAndGet();
                     }
                 }
+            } finally {
+                metricsHook.regionWorkerStopped();
             }
         }
     }
@@ -500,11 +540,12 @@ public class SearchCoords {
 
         @Override
         public void run() {
+            metricsHook.regionWorkerStarted();
             try {
                 // 预热 SeedChecker，避免首个候选承担全部初始化成本
-                getThreadResources(seed, worldPresetMode).getTerrainChecker();
+                getThreadResources(seed, worldPresetMode, metricsHook).getTerrainChecker();
                 if (worldPresetMode != WorldPresetMode.SINGLE_BIOME && checkGeneration) {
-                    getThreadResources(seed, worldPresetMode).getStructureChecker();
+                    getThreadResources(seed, worldPresetMode, metricsHook).getStructureChecker();
                 }
                 while (isRunning) {
                     waitIfPaused();
@@ -519,7 +560,8 @@ public class SearchCoords {
                         CPos pos = phase2Candidates.get(index);
                         int hutX = 16 * pos.getX();
                         int hutZ = 16 * pos.getZ();
-                        Result estimated = checkHeight(seed, hutX, hutZ, maxHeight, mcVersion, worldPresetMode);
+                        Result estimated = checkHeight(seed, hutX, hutZ, maxHeight, mcVersion,
+                                worldPresetMode, metricsHook);
                         if (!(estimated.height <= maxHeight)) {
                             continue;
                         }
@@ -534,6 +576,7 @@ public class SearchCoords {
                 }
             } finally {
                 clearThreadResources(seed);
+                metricsHook.regionWorkerStopped();
             }
         }
 
@@ -549,9 +592,26 @@ public class SearchCoords {
         }
 
         private void checkHeightByRealGen(CPos pos, Result estimatedHeight, Consumer<String> resultCallback) {
+            boolean permitAcquired = false;
+            try {
+                REAL_GENERATION_PERMITS.acquire();
+                permitAcquired = true;
+                checkHeightByRealGenWithPermit(pos, estimatedHeight, resultCallback);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                if (permitAcquired) {
+                    REAL_GENERATION_PERMITS.release();
+                }
+            }
+        }
+
+        private void checkHeightByRealGenWithPermit(CPos pos, Result estimatedHeight, Consumer<String> resultCallback) {
+            metricsHook.structureGenerationStarted();
             int hutX = 16 * pos.getX();
             int hutZ = 16 * pos.getZ();
-            Integer generatedFloorY = findGeneratedHutFloorY(seed, hutX, hutZ, worldPresetMode);
+            Integer generatedFloorY = findGeneratedHutFloorY(seed, hutX, hutZ, worldPresetMode,
+                    metricsHook);
             String resultStr;
             if (generatedFloorY == null) {
                 resultStr = estimatedHeight.toString() + " x";
@@ -578,28 +638,44 @@ public class SearchCoords {
     }
 
     public static Integer findGeneratedHutFloorY(long seed, int hutX, int hutZ, WorldPresetMode worldPresetMode) {
-        ThreadSeedResources resources = getThreadResources(seed, worldPresetMode);
+        return findGeneratedHutFloorY(seed, hutX, hutZ, worldPresetMode,
+                SearchMetricsHook.NO_OP);
+    }
+
+    private static Integer findGeneratedHutFloorY(long seed, int hutX, int hutZ,
+                                                   WorldPresetMode worldPresetMode,
+                                                   SearchMetricsHook metricsHook) {
+        ThreadSeedResources resources = getThreadResources(seed, worldPresetMode, metricsHook);
         SeedChecker checker = resources.getStructureChecker();
         try {
             for (int y = -55; y <= 128; y++) {
-                if (checker.getBlock(hutX + 2, y, hutZ + 2) == Blocks.SPRUCE_PLANKS) {
+                boolean isFloor = checker.getBlock(hutX + 2, y, hutZ + 2) == Blocks.SPRUCE_PLANKS;
+                SeedCheckerCache.clearIfOversized(checker, metricsHook);
+                if (isFloor) {
                     return y;
                 }
             }
             return null;
         } finally {
-            checker.clearMemory();
+            resources.releaseStructureChecker();
         }
     }
 
     // 精确检查女巫小屋所在区域的地形高度(未生成结构时)
     // maxHeight 用于提前放弃：若剩余列即使全是最低点仍超标，则不再扫完 footprint
     public static Result checkHeight(long seed, int x, int z, double maxHeight, MCVersion mcVersion, WorldPresetMode worldPresetMode) {
+        return checkHeight(seed, x, z, maxHeight, mcVersion, worldPresetMode,
+                SearchMetricsHook.NO_OP);
+    }
+
+    private static Result checkHeight(long seed, int x, int z, double maxHeight, MCVersion mcVersion,
+                                      WorldPresetMode worldPresetMode,
+                                      SearchMetricsHook metricsHook) {
         long structureSeed = seed & 281474976710655L;
         ChunkRand rand = new ChunkRand();
         rand.setCarverSeed(structureSeed, x / 16, z / 16, mcVersion);
         float a = rand.nextFloat();
-        ThreadSeedResources resources = getThreadResources(seed, worldPresetMode);
+        ThreadSeedResources resources = getThreadResources(seed, worldPresetMode, metricsHook);
         SeedChecker checker = resources.getTerrainChecker();
         try {
             int totalHeight = 0;
@@ -608,7 +684,7 @@ public class SearchCoords {
             if (a < 0.25F || (a >= 0.5F && a < 0.75F)) {
                 for (int i = x; i < x + 7; i++) {
                     for (int j = z; j < z + 9; j++) {
-                        int columnTop = scanColumnTop(checker, i, j, startY);
+                        int columnTop = scanColumnTop(checker, i, j, startY, metricsHook);
                         totalHeight += columnTop;
                         columnsDone++;
                         if (cannotMeetMaxHeight(totalHeight, columnsDone, maxHeight)) {
@@ -619,7 +695,7 @@ public class SearchCoords {
             } else {
                 for (int i = x; i < x + 9; i++) {
                     for (int j = z; j < z + 7; j++) {
-                        int columnTop = scanColumnTop(checker, i, j, startY);
+                        int columnTop = scanColumnTop(checker, i, j, startY, metricsHook);
                         totalHeight += columnTop;
                         columnsDone++;
                         if (cannotMeetMaxHeight(totalHeight, columnsDone, maxHeight)) {
@@ -631,18 +707,22 @@ public class SearchCoords {
             int height = (int) Math.ceil(((double) totalHeight / HUT_FOOTPRINT_COLUMNS) + 1);
             return new Result(x, z, height);
         } finally {
-            checker.clearMemory();
+            SeedCheckerCache.clear(checker, metricsHook);
         }
     }
 
     /** 兼容旧调用：不提前剪枝 */
     public static Result checkHeight(long seed, int x, int z, MCVersion mcVersion, WorldPresetMode worldPresetMode) {
-        return checkHeight(seed, x, z, Double.POSITIVE_INFINITY, mcVersion, worldPresetMode);
+        return checkHeight(seed, x, z, Double.POSITIVE_INFINITY, mcVersion, worldPresetMode,
+                SearchMetricsHook.NO_OP);
     }
 
-    private static int scanColumnTop(SeedChecker checker, int i, int j, int startY) {
+    private static int scanColumnTop(SeedChecker checker, int i, int j, int startY,
+                                     SearchMetricsHook metricsHook) {
         for (int k = startY; k >= COLUMN_SCAN_MIN_Y; k--) {
-            if (!checker.getBlockState(i, k, j).isAir()) {
+            boolean solid = !checker.getBlockState(i, k, j).isAir();
+            SeedCheckerCache.clearIfOversized(checker, metricsHook);
+            if (solid) {
                 return k;
             }
         }
@@ -664,7 +744,7 @@ public class SearchCoords {
     }
 
     public boolean check(long seed, int x, int z, int maxHeight) {
-        WorldNoiseCache cache = getThreadResources(seed, worldPresetMode).noise;
+        WorldNoiseCache cache = getThreadResources(seed, worldPresetMode, metricsHook).noise;
         int climateX = x + 8;
         int climateZ = z + 8;
         int heightX = x + 3;
@@ -731,12 +811,17 @@ public class SearchCoords {
     }
 
     private static ThreadSeedResources getThreadResources(long seed, WorldPresetMode worldPresetMode) {
+        return getThreadResources(seed, worldPresetMode, SearchMetricsHook.NO_OP);
+    }
+
+    private static ThreadSeedResources getThreadResources(long seed, WorldPresetMode worldPresetMode,
+                                                           SearchMetricsHook metricsHook) {
         ThreadSeedResources resources = THREAD_RESOURCES.get();
         if (resources == null || resources.seed != seed || resources.worldPresetMode != worldPresetMode) {
             if (resources != null) {
                 resources.clear();
             }
-            resources = new ThreadSeedResources(seed, worldPresetMode);
+            resources = new ThreadSeedResources(seed, worldPresetMode, metricsHook);
             THREAD_RESOURCES.set(resources);
         }
         return resources;
@@ -747,13 +832,15 @@ public class SearchCoords {
         final WorldPresetMode worldPresetMode;
         final WorldNoiseCache noise;
         private NoiseColumnSampler columnSampler;
+        final SearchMetricsHook metricsHook;
         private SeedChecker terrainChecker;
         private SeedChecker structureChecker;
 
-        ThreadSeedResources(long seed, WorldPresetMode worldPresetMode) {
+        ThreadSeedResources(long seed, WorldPresetMode worldPresetMode, SearchMetricsHook metricsHook) {
             this.seed = seed;
             this.worldPresetMode = worldPresetMode;
             this.noise = new WorldNoiseCache(seed, worldPresetMode);
+            this.metricsHook = metricsHook;
         }
 
         NoiseColumnSampler getColumnSampler() {
@@ -776,6 +863,7 @@ public class SearchCoords {
             if (terrainChecker == null) {
                 terrainChecker = SeedCheckerFactory.create(
                         seed, TargetState.NO_STRUCTURES, SeedCheckerDimension.OVERWORLD, worldPresetMode);
+                metricsHook.seedCheckerCreated(terrainChecker);
             }
             return terrainChecker;
         }
@@ -784,16 +872,127 @@ public class SearchCoords {
             if (structureChecker == null) {
                 structureChecker = SeedCheckerFactory.create(
                         seed, TargetState.STRUCTURES, SeedCheckerDimension.OVERWORLD, worldPresetMode);
+                metricsHook.seedCheckerCreated(structureChecker);
             }
             return structureChecker;
         }
 
         void clear() {
             if (terrainChecker != null) {
-                terrainChecker.clearMemory();
+                SeedCheckerCache.clear(terrainChecker, metricsHook);
+                metricsHook.seedCheckerReleased(terrainChecker);
+                terrainChecker = null;
             }
             if (structureChecker != null) {
-                structureChecker.clearMemory();
+                SeedCheckerCache.clear(structureChecker, metricsHook);
+                metricsHook.seedCheckerReleased(structureChecker);
+                structureChecker = null;
+            }
+        }
+
+        void releaseStructureChecker() {
+            if (structureChecker != null) {
+                SeedCheckerCache.clear(structureChecker, metricsHook);
+                metricsHook.seedCheckerReleased(structureChecker);
+                structureChecker = null;
+            }
+        }
+    }
+
+    private static int boundedThreadCount(int requested) {
+        return Math.max(1, Math.min(requested, MAX_SEARCH_THREADS));
+    }
+
+    private static void validateSearchBounds(int minX, int maxX, int minZ, int maxZ) {
+        long spanX = (long) maxX - minX;
+        long spanZ = (long) maxZ - minZ;
+        if (spanX <= 0 || spanZ <= 0) {
+            throw new IllegalArgumentException("Search bounds must have min < max");
+        }
+        if (spanX > MAX_SEARCH_AXIS_SPAN || spanZ > MAX_SEARCH_AXIS_SPAN
+                || spanX > MAX_SEARCH_ITERATIONS / spanZ) {
+            throw new IllegalArgumentException(
+                    "Search range is too large; split it into smaller searches "
+                            + "(max axis span=" + MAX_SEARCH_AXIS_SPAN
+                            + ", max iterations=" + MAX_SEARCH_ITERATIONS + ")");
+        }
+    }
+
+    private static int positiveIntProperty(String name, int defaultValue) {
+        return Math.max(1, Integer.getInteger(name, defaultValue));
+    }
+
+    private static int boundedConcurrencyProperty(String name, int defaultValue) {
+        return Math.max(1, Math.min(4, Integer.getInteger(name, defaultValue)));
+    }
+
+    private static int boundedChunkCacheSize(String name, int defaultValue) {
+        return Math.max(512, Math.min(2048, Integer.getInteger(name, defaultValue)));
+    }
+
+    private static long positiveLongProperty(String name, long defaultValue) {
+        try {
+            return Math.max(1L, Long.parseLong(System.getProperty(name, Long.toString(defaultValue))));
+        } catch (NumberFormatException ignored) {
+            return defaultValue;
+        }
+    }
+
+    /**
+     * seed-checker 1.2.0 的 clearMemory() 只会清空 chunkMap，随后调用 Runtime.gc()。
+     * 直接清空固定依赖版本中的 Map，可以避免每个候选点都触发 stop-the-world Full GC。
+     * 反射失败时回退到依赖库方法，以保持其他版本的正确性。
+     */
+    private static final class SeedCheckerCache {
+        private static final Field GENERATOR_FIELD;
+        private static final Field CHUNK_MAP_FIELD;
+
+        static {
+            Field generator = null;
+            Field chunkMap = null;
+            try {
+                generator = SeedChecker.class.getDeclaredField("seedChunkGenerator");
+                generator.setAccessible(true);
+                Class<?> generatorClass = Class.forName("nl.jellejurre.seedchecker.SeedChunkGenerator");
+                chunkMap = generatorClass.getDeclaredField("chunkMap");
+                chunkMap.setAccessible(true);
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+                // 由下方 clear() 的回退逻辑处理。
+            }
+            GENERATOR_FIELD = generator;
+            CHUNK_MAP_FIELD = chunkMap;
+        }
+
+        static void clearIfOversized(SeedChecker checker, SearchMetricsHook metricsHook) {
+            Map<?, ?> chunks = chunks(checker);
+            if (chunks != null) {
+                metricsHook.chunkCacheObserved(checker, chunks.size());
+                if (chunks.size() > MAX_CHUNK_CACHE_SIZE) {
+                    chunks.clear();
+                    metricsHook.chunkCacheObserved(checker, 0);
+                }
+            }
+        }
+
+        static void clear(SeedChecker checker, SearchMetricsHook metricsHook) {
+            Map<?, ?> chunks = chunks(checker);
+            if (chunks != null) {
+                metricsHook.chunkCacheObserved(checker, chunks.size());
+                chunks.clear();
+                metricsHook.chunkCacheObserved(checker, 0);
+            } else {
+                checker.clearMemory();
+            }
+        }
+
+        private static Map<?, ?> chunks(SeedChecker checker) {
+            if (GENERATOR_FIELD == null || CHUNK_MAP_FIELD == null) {
+                return null;
+            }
+            try {
+                return (Map<?, ?>) CHUNK_MAP_FIELD.get(GENERATOR_FIELD.get(checker));
+            } catch (IllegalAccessException | RuntimeException ignored) {
+                return null;
             }
         }
     }
@@ -864,7 +1063,7 @@ public class SearchCoords {
         WorldNoiseCache cache = getThreadResources(worldSeed, worldPresetMode).noise;
         double a = 4 * cache.caveLayer.sample(x, y * 8, z) * cache.caveLayer.sample(x, y * 8, z);
         double b = MathHelper.clamp((0.27 + cache.caveCheese.sample(x, y * 0.6666666666666666, z)), -1, 1);
-        return a + b;//Actually there still need to add a function about sloped_cheese, but sloped_cheese is too complex and IDK how to calculate it.
+        return a + b; // 仍缺少 sloped_cheese，但其计算过程过于复杂。
     }
 
     public static double Entrance2(long worldSeed, int x, int y, int z, WorldPresetMode worldPresetMode) {
