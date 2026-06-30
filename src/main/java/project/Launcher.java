@@ -9,6 +9,17 @@ import org.apache.logging.log4j.ThreadContext;
  */
 public class Launcher {
     static {
+        // Minecraft Util 会通过此属性创建专用 ForkJoinPool。
+        // 必须在 SharedConstants/Util 初始化前完成设置。
+        int worldgenThreads;
+        try {
+            worldgenThreads = Integer.parseInt(
+                    System.getProperty("lowyswamphut.maxWorldgenThreads", "2"));
+        } catch (NumberFormatException ignored) {
+            worldgenThreads = 2;
+        }
+        System.setProperty("max.bg.threads",
+                Integer.toString(Math.max(1, Math.min(4, worldgenThreads))));
         // 在类加载时立即设置系统属性
         // 这些属性必须在任何 log4j 类被加载之前设置
         System.setProperty("log4j2.isThreadContextMapInheritable", "true");
