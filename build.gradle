@@ -88,3 +88,15 @@ tasks.register('buildAllJars') {
     description = 'Builds all executable JARs'
     dependsOn buildMainJar
 }
+
+['A', 'B', 'C'].each { profile ->
+    tasks.register("benchmark${profile}", JavaExec) {
+        group = 'verification'
+        description = "Runs LowYSwampHut stress profile ${profile}"
+        dependsOn testClasses
+        classpath = sourceSets.test.runtimeClasspath
+        mainClass.set('project.benchmark.BenchmarkRunner')
+        args "--profile=${profile}"
+        jvmArgs '-Xms2g', '-Xmx4g'
+    }
+}
