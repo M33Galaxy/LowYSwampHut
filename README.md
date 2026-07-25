@@ -68,19 +68,17 @@ The top-left part is the **Parameter Settings** area, which includes:
 
 **版本**：要使用的 Minecraft 版本。选项：26.2、1.21.1~26.1、1.20.1、1.19.2、1.18.2（默认：1.21.1）。
 
-**MinX/MaxX/MinZ/MaxZ (x512)**: The coordinate range to search for Swamp Huts. The default values are the world boundaries (-58594 to 58593). Valid range is -30,000,000 to 30,000,000.
+**MinX/MaxX/MinZ/MaxZ/Square side length (x512)**: The coordinate range to search for Swamp Huts. The default values are the world boundaries (-58594 to 58593). Valid range is -30,000,000 to 30,000,000. Square side length option can search specified length of square centered at (0,0) (default 117188).
 
-**MinX/MaxX/MinZ/MaxZ (x512)**：搜索女巫小屋的坐标范围。默认值为世界边界（-58594 到 58593）。有效范围为 -30,000,000 到 30,000,000。
+**MinX/MaxX/MinZ/MaxZ/正方形区域边长 (x512)**：搜索女巫小屋的坐标范围。默认值为世界边界（-58594 到 58593）。有效范围为 -30,000,000 到 30,000,000。正方形区域边长可以直接输入以原点为中心指定长度的区域进行搜索（世界边界为117188）。
 
-**Precise Generation Check (Slightly Affects Efficiency)**: When enabled, the program will check whether the Swamp Hut can actually generate at each coordinate. Coordinates that cannot generate will be marked with "x". **Note: Enabling this option will slightly reduce search efficiency, but it helps filter out coordinates that cannot actually generate huts.**
+**Precise Generation Check (Slightly Affects Efficiency)**: When enabled, the program will check whether the Swamp Hut can actually generate at each coordinate. Coordinates that cannot generate will be marked with "x". **Note: Enabling this option will slightly reduce phase 2 search efficiency, but it helps filter out coordinates that cannot actually generate huts.**
 
-**精确检查生成情况(略微影响效率)**：启用后，程序将检查每个坐标是否能够实际生成女巫小屋。无法生成的坐标将被标记为"x"。**注意：启用此选项会略微降低搜索效率，但有助于筛选出无法实际生成小屋的坐标。**
+**精确检查生成情况(略微影响效率)**：启用后，程序将检查每个坐标是否能够实际生成女巫小屋。无法生成的坐标将被标记为"x"。**注意：启用此选项会略微降低2阶段搜索效率，但有助于筛选出无法实际生成小屋的坐标。**
 
 The top-right part shows the **Search Results**. The results are displayed in the format `/tp x y z`, where y is the Y-coordinate of the Swamp Hut. **Note: The actual hut Y-coordinate may be within ±1 block of the output coordinate. When precise generation check is enabled, the program can indicate whether the hut can actually generate.**
 
 右上角部分显示**检查结果**。结果以 `/tp x y z` 格式显示，其中 y 是女巫小屋的 Y 坐标。**注意：真实小屋 y 值可能会处于输出坐标 ±1 格以内。开启精确搜索后可提示小屋是否能真实生成。**
-
-右上角部分显示**检查结果**。结果以 `/tp x y z` 格式显示，其中 y 是女巫小屋的 Y 坐标。**注意：真实小屋 y 值可能会处于输出坐标 ±1 格以内，且不能保证每个坐标都能实际生成小屋。**
 
 At the bottom, you can see the **Progress Bar**, which shows the search progress, elapsed time, and remaining time.
 
@@ -143,7 +141,7 @@ The search will process each seed in the list sequentially. The progress bar sho
 - **Progress tracking**: Real-time display of search progress, elapsed time, and estimated remaining time
 - **Result sorting**: Sort results by Y-coordinate or distance
 - **Export functionality**: Export search results or seed lists
-- **Version support**: Supports multiple Minecraft versions (1.18.2, 1.19.2, 1.20.1, 1.21.1)
+- **Version support**: Supports multiple Minecraft versions (1.18.2, 1.19.2, 1.20.1, 1.21.1、26.2+)
 - **Batch processing**: Process multiple seeds from a list file
 
 - **多线程搜索**：支持多线程并行搜索以提高效率
@@ -151,7 +149,7 @@ The search will process each seed in the list sequentially. The progress bar sho
 - **进度跟踪**：实时显示搜索进度、已过时间和预计剩余时间
 - **结果排序**：按 Y 坐标或距离排序结果
 - **导出功能**：导出搜索结果或种子列表
-- **版本支持**：支持多个 Minecraft 版本（1.18.2、1.19.2、1.20.1、1.21.1）
+- **版本支持**：支持多个 Minecraft 版本（1.18.2、1.19.2、1.20.1、1.21.1、26.2+）
 - **批量处理**：从列表文件处理多个种子
 
 ## Libraries mainly used in this program / 此程序主要使用的库
@@ -180,15 +178,18 @@ The search will process each seed in the list sequentially. The progress bar sho
 
 ## Notes / 注意事项
 
+- The search is separated in 2 phases, the first of which will not emit any results.
 - The search results show the theoretical Y-coordinate of the Swamp Hut. The actual Y-coordinate may vary by ±1 block.
-- Not every coordinate in the results can guarantee the actual generation of a Swamp Hut in the game. When "Precise Generation Check" is enabled, coordinates that cannot generate will be marked with "无法生成" (cannot generate).
-- Enabling "Precise Generation Check" will slightly reduce search efficiency, as it requires additional checks for each coordinate. If you prioritize search speed, you can disable this option.
-- For large coordinate ranges, the search may take a long time. It is recommended to use appropriate thread counts based on your computer's performance.
+- Not every coordinate in the results can guarantee the actual generation of a Swamp Hut in the game. When "Precise Generation Check" is enabled, coordinates that cannot generate will be marked with "x".
+- Enabling "Precise Generation Check" will slightly reduce phase 2 search efficiency, as it requires additional checks for each coordinate. If you prioritize search speed, you can disable this option.
+- For large searching area, the search may take a long time. It is recommended to use appropriate thread counts based on your computer's performance.
 - When searching from a seed list, it is not recommended to load a list with more than 10 million seeds.
 
+- 搜索分为2阶段，只有第2阶段才会输出结果。
+
 - 搜索结果显示的是女巫小屋的理论 Y 坐标。实际 Y 坐标可能会有 ±1 格的偏差。
-- 结果中的每个坐标不能保证在游戏中实际生成女巫小屋。当启用"精确检查生成情况"时，无法生成的坐标将被标记为"无法生成"。
-- 启用"精确检查生成情况"会略微降低搜索效率，因为它需要对每个坐标进行额外检查。如果您优先考虑搜索速度，可以禁用此选项。
+- 结果中的每个坐标不能保证在游戏中实际生成女巫小屋。当启用"精确检查生成情况"时，无法生成的坐标将被标记为"x"。
+- 启用"精确检查生成情况"会略微降低2阶段搜索效率，因为它需要对每个坐标进行额外检查。如果您优先考虑搜索速度，可以禁用此选项。
 - 对于大范围的坐标搜索，可能需要较长时间。建议根据您的计算机性能使用适当的线程数。
 - 从种子列表搜索时，不建议加载超过 1000 万种子的列表。
 

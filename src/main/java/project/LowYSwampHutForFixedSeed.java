@@ -45,6 +45,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     private JTextField maxXField;
     private JTextField minZField;
     private JTextField maxZField;
+    private JCheckBox squareSideCheckBox;
+    private JTextField squareSideField;
+    private boolean squareSideUpdating = false;
     private JCheckBox searchCheckGenerationCheckBox;
     private JComboBox<String> languageComboBox;
     private JButton searchStartButton;
@@ -94,6 +97,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     private JTextField listMaxXField;
     private JTextField listMinZField;
     private JTextField listMaxZField;
+    private JCheckBox listSquareSideCheckBox;
+    private JTextField listSquareSideField;
+    private boolean listSquareSideUpdating = false;
     private JCheckBox listSearchCheckGenerationCheckBox;
     private JButton listSearchStartButton;
     private JButton listSearchPauseButton;
@@ -299,9 +305,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.gridy = 5;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        JLabel minXLabel = new JLabel("MinX(x512):");
-        minXLabel.setFont(getLoadedFont());
-        inputPanel.add(minXLabel, gbc);
+        searchMinXLabel = new JLabel(getString("label.minX"));
+        searchMinXLabel.setFont(getLoadedFont());
+        inputPanel.add(searchMinXLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -319,9 +325,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.gridy = 6;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        JLabel maxXLabel = new JLabel("MaxX(x512):");
-        maxXLabel.setFont(getLoadedFont());
-        inputPanel.add(maxXLabel, gbc);
+        searchMaxXLabel = new JLabel(getString("label.maxX"));
+        searchMaxXLabel.setFont(getLoadedFont());
+        inputPanel.add(searchMaxXLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -338,9 +344,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.gridy = 7;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        JLabel minZLabel = new JLabel("MinZ(x512):");
-        minZLabel.setFont(getLoadedFont());
-        inputPanel.add(minZLabel, gbc);
+        searchMinZLabel = new JLabel(getString("label.minZ"));
+        searchMinZLabel.setFont(getLoadedFont());
+        inputPanel.add(searchMinZLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -357,9 +363,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.gridy = 8;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
-        JLabel maxZLabel = new JLabel("MaxZ(x512):");
-        maxZLabel.setFont(getLoadedFont());
-        inputPanel.add(maxZLabel, gbc);
+        searchMaxZLabel = new JLabel(getString("label.maxZ"));
+        searchMaxZLabel.setFont(getLoadedFont());
+        inputPanel.add(searchMaxZLabel, gbc);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.weightx = 1.0;
@@ -371,9 +377,46 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         });
         inputPanel.add(maxZField, gbc);
 
-        // 精确检查生成情况复选框
+        // 正方形区域边长（勾选后按中心 0,0 填入 min/max）
         gbc.gridx = 0;
         gbc.gridy = 9;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        squareSideCheckBox = new JCheckBox(getString("label.squareSide"));
+        squareSideCheckBox.setFont(getLoadedFont());
+        inputPanel.add(squareSideCheckBox, gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        long defaultSide = (long) DEFAULT_MAX_X - DEFAULT_MIN_X + 1;
+        squareSideField = new JTextField(String.valueOf(defaultSide), 20);
+        squareSideCheckBox.setSelected(true);
+        squareSideCheckBox.addActionListener(e -> onSquareSideModeToggled());
+        squareSideField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                applySquareSideToBounds();
+            }
+
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                applySquareSideToBounds();
+            }
+
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                applySquareSideToBounds();
+            }
+        });
+        squareSideField.addFocusListener(new java.awt.event.FocusAdapter() {
+            public void focusLost(java.awt.event.FocusEvent e) {
+                validateIntegerInput(squareSideField, getString("label.squareSide"));
+            }
+        });
+        inputPanel.add(squareSideField, gbc);
+        applyBoundFieldEnableState(true);
+        applySquareSideToBounds();
+
+        // 精确检查生成情况复选框
+        gbc.gridx = 0;
+        gbc.gridy = 10;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
         searchCheckGenerationLabel = new JLabel(getString("label.checkGeneration"));
@@ -390,7 +433,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
 
         // 语言选择下拉框
         gbc.gridx = 0;
-        gbc.gridy = 10;
+        gbc.gridy = 11;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
         searchLanguageLabel = new JLabel(getString("label.language"));
@@ -628,10 +671,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 maxHeightComboBox.setEnabled(true);
                 versionComboBox.setEnabled(true);
                 worldPresetComboBox.setEnabled(true);
-                minXField.setEnabled(true);
-                maxXField.setEnabled(true);
-                minZField.setEnabled(true);
-                maxZField.setEnabled(true);
+                applyBoundFieldEnableState(true);
                 updateSingleSeedPreciseGenerationCheckUi();
                 if (languageComboBox != null) {
                     languageComboBox.setEnabled(true);
@@ -993,17 +1033,14 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             maxHeightComboBox.setEnabled(false);
             versionComboBox.setEnabled(false);
             worldPresetComboBox.setEnabled(false);
-            minXField.setEnabled(false);
-            maxXField.setEnabled(false);
-            minZField.setEnabled(false);
-            maxZField.setEnabled(false);
+            applyBoundFieldEnableState(false);
             updateSingleSeedPreciseGenerationCheckUi();
             if (languageComboBox != null) {
                 languageComboBox.setEnabled(false);
             }
             searchResultArea.setText("");
             searchProgressBar.setValue(0);
-            searchProgressBar.setString(getString("progress.format", 0, 0, 0.0));
+            searchProgressBar.setString(getString("progress.stage1", 0, 0, 0.0));
             searchElapsedTimeLabel.setText(getString("elapsedTime", formatTime(0)));
             searchRemainingTimeLabel.setText(getString("remainingTime.calculating"));
 
@@ -1056,10 +1093,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         maxHeightComboBox.setEnabled(true);
         versionComboBox.setEnabled(true);
         worldPresetComboBox.setEnabled(true);
-        minXField.setEnabled(true);
-        maxXField.setEnabled(true);
-        minZField.setEnabled(true);
-        maxZField.setEnabled(true);
+        applyBoundFieldEnableState(true);
         updateSingleSeedPreciseGenerationCheckUi();
         if (languageComboBox != null) {
             languageComboBox.setEnabled(true);
@@ -1068,10 +1102,148 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     }
 
     private void resetSearchToDefaults() {
+        long defaultSide = (long) DEFAULT_MAX_X - DEFAULT_MIN_X + 1;
+        if (squareSideCheckBox != null) {
+            squareSideCheckBox.setSelected(true);
+        }
+        if (squareSideField != null) {
+            squareSideUpdating = true;
+            squareSideField.setText(String.valueOf(defaultSide));
+            squareSideUpdating = false;
+        }
         minXField.setText(String.valueOf(DEFAULT_MIN_X));
         maxXField.setText(String.valueOf(DEFAULT_MAX_X));
         minZField.setText(String.valueOf(DEFAULT_MIN_Z));
         maxZField.setText(String.valueOf(DEFAULT_MAX_Z));
+        applyBoundFieldEnableState(!isSearchRunning);
+        applySquareSideToBounds();
+    }
+
+    private void onSquareSideModeToggled() {
+        applyBoundFieldEnableState(!isSearchRunning);
+        if (squareSideCheckBox != null && squareSideCheckBox.isSelected()) {
+            applySquareSideToBounds();
+        }
+    }
+
+    private void applyBoundFieldEnableState(boolean allowEdit) {
+        boolean squareMode = squareSideCheckBox != null && squareSideCheckBox.isSelected();
+        if (squareSideCheckBox != null) {
+            squareSideCheckBox.setEnabled(allowEdit);
+        }
+        if (squareSideField != null) {
+            squareSideField.setEnabled(allowEdit && squareMode);
+        }
+        boolean boundsEditable = allowEdit && !squareMode;
+        if (minXField != null) {
+            minXField.setEnabled(boundsEditable);
+        }
+        if (maxXField != null) {
+            maxXField.setEnabled(boundsEditable);
+        }
+        if (minZField != null) {
+            minZField.setEnabled(boundsEditable);
+        }
+        if (maxZField != null) {
+            maxZField.setEnabled(boundsEditable);
+        }
+    }
+
+    /** Fill min/max from square side length centered at (0, 0). Side = max - min + 1. */
+    private void applySquareSideToBounds() {
+        if (squareSideUpdating || squareSideCheckBox == null || !squareSideCheckBox.isSelected()) {
+            return;
+        }
+        if (squareSideField == null || minXField == null) {
+            return;
+        }
+        String text = squareSideField.getText().trim();
+        if (text.isEmpty()) {
+            return;
+        }
+        try {
+            long side = Long.parseLong(text);
+            if (side < 1) {
+                return;
+            }
+            long min = -side / 2;
+            long max = min + side - 1;
+            if (min < Integer.MIN_VALUE || max > Integer.MAX_VALUE) {
+                return;
+            }
+            squareSideUpdating = true;
+            minXField.setText(String.valueOf((int) min));
+            maxXField.setText(String.valueOf((int) max));
+            minZField.setText(String.valueOf((int) min));
+            maxZField.setText(String.valueOf((int) max));
+            squareSideUpdating = false;
+            checkSearchParameterChange();
+        } catch (NumberFormatException ignored) {
+            // wait until the field holds a valid integer
+        }
+    }
+
+    private void onListSquareSideModeToggled() {
+        applyListBoundFieldEnableState(!isListSearchRunning);
+        if (listSquareSideCheckBox != null && listSquareSideCheckBox.isSelected()) {
+            applyListSquareSideToBounds();
+        }
+    }
+
+    private void applyListBoundFieldEnableState(boolean allowEdit) {
+        boolean squareMode = listSquareSideCheckBox != null && listSquareSideCheckBox.isSelected();
+        if (listSquareSideCheckBox != null) {
+            listSquareSideCheckBox.setEnabled(allowEdit);
+        }
+        if (listSquareSideField != null) {
+            listSquareSideField.setEnabled(allowEdit && squareMode);
+        }
+        boolean boundsEditable = allowEdit && !squareMode;
+        if (listMinXField != null) {
+            listMinXField.setEnabled(boundsEditable);
+        }
+        if (listMaxXField != null) {
+            listMaxXField.setEnabled(boundsEditable);
+        }
+        if (listMinZField != null) {
+            listMinZField.setEnabled(boundsEditable);
+        }
+        if (listMaxZField != null) {
+            listMaxZField.setEnabled(boundsEditable);
+        }
+    }
+
+    private void applyListSquareSideToBounds() {
+        if (listSquareSideUpdating || listSquareSideCheckBox == null || !listSquareSideCheckBox.isSelected()) {
+            return;
+        }
+        if (listSquareSideField == null || listMinXField == null) {
+            return;
+        }
+        String text = listSquareSideField.getText().trim();
+        if (text.isEmpty()) {
+            return;
+        }
+        try {
+            long side = Long.parseLong(text);
+            if (side < 1) {
+                return;
+            }
+            long min = -side / 2;
+            long max = min + side - 1;
+            if (min < Integer.MIN_VALUE || max > Integer.MAX_VALUE) {
+                return;
+            }
+            listSquareSideUpdating = true;
+            listMinXField.setText(String.valueOf((int) min));
+            listMaxXField.setText(String.valueOf((int) max));
+            listMinZField.setText(String.valueOf((int) min));
+            listMaxZField.setText(String.valueOf((int) max));
+            listSquareSideUpdating = false;
+            checkListSearchParameterChange();
+        } catch (NumberFormatException ignored) {
+            // wait until the field holds a valid integer
+        }
     }
 
     // 创建从种子列表搜索面板
@@ -1253,9 +1425,46 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         });
         inputPanel.add(listMaxZField, gbc);
 
-        // 精确检查生成情况复选框
+        // 正方形区域边长（勾选后按中心 0,0 填入 min/max）
         gbc.gridx = 0;
         gbc.gridy = 9;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        listSquareSideCheckBox = new JCheckBox(getString("label.squareSide"));
+        listSquareSideCheckBox.setFont(getLoadedFont());
+        inputPanel.add(listSquareSideCheckBox, gbc);
+        gbc.gridx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        long listDefaultSide = (long) DEFAULT_LIST_MAX_X - DEFAULT_LIST_MIN_X + 1;
+        listSquareSideField = new JTextField(String.valueOf(listDefaultSide), 20);
+        listSquareSideCheckBox.setSelected(true);
+        listSquareSideCheckBox.addActionListener(e -> onListSquareSideModeToggled());
+        listSquareSideField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                applyListSquareSideToBounds();
+            }
+
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                applyListSquareSideToBounds();
+            }
+
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                applyListSquareSideToBounds();
+            }
+        });
+        listSquareSideField.addFocusListener(new java.awt.event.FocusAdapter() {
+            public void focusLost(java.awt.event.FocusEvent e) {
+                validateIntegerInput(listSquareSideField, getString("label.squareSide"));
+            }
+        });
+        inputPanel.add(listSquareSideField, gbc);
+        applyListBoundFieldEnableState(true);
+        applyListSquareSideToBounds();
+
+        // 精确检查生成情况复选框
+        gbc.gridx = 0;
+        gbc.gridy = 10;
         gbc.fill = GridBagConstraints.NONE;
         gbc.weightx = 0;
         listSearchCheckGenerationLabel = new JLabel(getString("label.checkGeneration"));
@@ -1385,8 +1594,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
 
             int progress = (int) Math.min(100, info.percentage());
             searchProgressBar.setValue(progress);
-            // 将进度信息显示在进度条中
-            searchProgressBar.setString(getString("progress.format", info.processed(), info.total(), info.percentage()));
+            String progressKey = info.stage() == 1 ? "progress.stage1" : "progress.stage2";
+            searchProgressBar.setString(getString(progressKey, info.processed(), info.total(), info.percentage()));
 
             // 暂停时不更新时间
             if (!isSearchPaused) {
@@ -1400,7 +1609,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 searchRemainingTimeLabel.setText(getString("remainingTime.paused"));
             }
 
-            if (info.processed() >= info.total()) {
+            // 仅阶段2完成时结束搜索（阶段1达到100%不解锁 UI）
+            if (info.stage() == 2 && info.processed() >= info.total()) {
                 isSearchRunning = false;
                 isSearchPaused = false;
                 searchStartButton.setEnabled(true);
@@ -1413,10 +1623,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 maxHeightComboBox.setEnabled(true);
                 versionComboBox.setEnabled(true);
                 worldPresetComboBox.setEnabled(true);
-                minXField.setEnabled(true);
-                maxXField.setEnabled(true);
-                minZField.setEnabled(true);
-                maxZField.setEnabled(true);
+                applyBoundFieldEnableState(true);
                 updateSingleSeedPreciseGenerationCheckUi();
                 if (languageComboBox != null) {
                     languageComboBox.setEnabled(true);
@@ -1731,6 +1938,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         if (searchMaxZLabel != null) {
             searchMaxZLabel.setText(getString("label.maxZ"));
         }
+        if (squareSideCheckBox != null) {
+            squareSideCheckBox.setText(getString("label.squareSide"));
+        }
         if (searchCheckGenerationLabel != null) {
             searchCheckGenerationLabel.setText(getString("label.checkGeneration"));
         }
@@ -1816,6 +2026,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         }
         if (listSearchMaxZLabel != null) {
             listSearchMaxZLabel.setText(getString("label.maxZ"));
+        }
+        if (listSquareSideCheckBox != null) {
+            listSquareSideCheckBox.setText(getString("label.squareSide"));
         }
         if (listSearchCheckGenerationLabel != null) {
             listSearchCheckGenerationLabel.setText(getString("label.checkGeneration"));
@@ -1994,10 +2207,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 listMaxHeightComboBox.setEnabled(true);
                 listVersionComboBox.setEnabled(true);
                 listWorldPresetComboBox.setEnabled(true);
-                listMinXField.setEnabled(true);
-                listMaxXField.setEnabled(true);
-                listMinZField.setEnabled(true);
-                listMaxZField.setEnabled(true);
+                applyListBoundFieldEnableState(true);
                 updateListSearchPreciseGenerationCheckUi();
                 listSearchResultArea.setText("");
                 listSearchProgressBar.setValue(0);
@@ -2270,10 +2480,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             listMaxHeightComboBox.setEnabled(false);
             listVersionComboBox.setEnabled(false);
             listWorldPresetComboBox.setEnabled(false);
-            listMinXField.setEnabled(false);
-            listMaxXField.setEnabled(false);
-            listMinZField.setEnabled(false);
-            listMaxZField.setEnabled(false);
+            applyListBoundFieldEnableState(false);
             updateListSearchPreciseGenerationCheckUi();
             listSearchResultArea.setText("");
             listSearchProgressBar.setValue(0);
@@ -2399,10 +2606,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                         final long finalDisplayProcessed = displayProcessed;
                         final long finalTotal = total;
                         final double finalDisplayPercentage = displayPercentage;
+                        final String seedProgressKey = info.stage() == 1 ? "currentSeed.stage1" : "currentSeed.stage2";
                         SwingUtilities.invokeLater(() -> {
                             if (isListSearchRunning) {
                                 listSearchCurrentSeedProgressLabel.setText(
-                                        getString("currentSeed", currentSeedIndex, totalSeeds, finalDisplayProcessed, finalTotal, finalDisplayPercentage)
+                                        getString(seedProgressKey, currentSeedIndex, totalSeeds, finalDisplayProcessed, finalTotal, finalDisplayPercentage)
                                 );
                             }
                         });
@@ -2490,10 +2698,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                     listMaxHeightComboBox.setEnabled(true);
                     listVersionComboBox.setEnabled(true);
                     listWorldPresetComboBox.setEnabled(true);
-                    listMinXField.setEnabled(true);
-                    listMaxXField.setEnabled(true);
-                    listMinZField.setEnabled(true);
-                    listMaxZField.setEnabled(true);
+                    applyListBoundFieldEnableState(true);
                     updateListSearchPreciseGenerationCheckUi();
                     listSearchProgressBar.setValue((int) totalSeeds);
                     listSearchProgressBar.setString(getString("progress.totalComplete", totalSeeds, totalSeeds));
@@ -2544,18 +2749,26 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         listMaxHeightComboBox.setEnabled(true);
         listVersionComboBox.setEnabled(true);
         listWorldPresetComboBox.setEnabled(true);
-        listMinXField.setEnabled(true);
-        listMaxXField.setEnabled(true);
-        listMinZField.setEnabled(true);
-        listMaxZField.setEnabled(true);
+        applyListBoundFieldEnableState(true);
         updateListSearchPreciseGenerationCheckUi();
     }
 
     private void resetListSearchToDefaults() {
+        long listDefaultSide = (long) DEFAULT_LIST_MAX_X - DEFAULT_LIST_MIN_X + 1;
+        if (listSquareSideCheckBox != null) {
+            listSquareSideCheckBox.setSelected(true);
+        }
+        if (listSquareSideField != null) {
+            listSquareSideUpdating = true;
+            listSquareSideField.setText(String.valueOf(listDefaultSide));
+            listSquareSideUpdating = false;
+        }
         listMinXField.setText(String.valueOf(DEFAULT_LIST_MIN_X));
         listMaxXField.setText(String.valueOf(DEFAULT_LIST_MAX_X));
         listMinZField.setText(String.valueOf(DEFAULT_LIST_MIN_Z));
         listMaxZField.setText(String.valueOf(DEFAULT_LIST_MAX_Z));
+        applyListBoundFieldEnableState(!isListSearchRunning);
+        applyListSquareSideToBounds();
     }
 
     // 解析结果文本，返回种子和坐标的映射
