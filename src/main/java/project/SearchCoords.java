@@ -43,13 +43,16 @@ public class SearchCoords {
     // ========== 预筛 / 高度扫描可调常量 ==========
     /** 多点梯子估高均值超过 maxHeight 此裕量才拒绝进入阶段2（越大越宽松、越不易漏检） */
     private static final int DENSITY_PREFILTER_HEIGHT_MARGIN = 8;
-    /** 相对小屋原点的预筛采样点偏移（块坐标） */
-    private static final int[][] DENSITY_PREFILTER_PROBE_OFFSETS = {
-            {3, 3},
-            {1, 1},
-            {1, 7},
-            {5, 1},
-            {5, 7}
+    /**
+     * 相对小屋局部坐标系的 5 探针（未旋转 7×9）：中心 + 十字。
+     * 运用前会按 carver RNG 朝向映射到世界坐标。
+     */
+    private static final int[][] DENSITY_PREFILTER_LOCAL_PROBES = {
+            {3, 4}, // 中心 (HUT_LOCAL_WIDTH-1)/2, (HUT_LOCAL_DEPTH-1)/2
+            {3, 1},
+            {3, 7},
+            {1, 4},
+            {5, 4}
     };
     /** cheese 梯子向下探测的 Y 档位 */
     private static final int[] DENSITY_PREFILTER_LADDER_DOWN = {40, 30, 20, 10, 0, -10, -20, -30, -40, -50};
@@ -62,20 +65,21 @@ public class SearchCoords {
 
     /*
      * SeedChecker 生成 chunk 时会启动额外的 CompletableFuture 工作。
-     * 限制外层线程池可以避免多个搜索线程同时保留完整的 chunk generation 邻域。
+     * 默认并行度与 CPU 核数对齐；仍可用系统属性覆盖。
+     * 注意：切勿在 getBlock 热路径里频繁反射清缓存，那会比限制线程更伤性能。
      */
-    private static final int MAX_SEARCH_THREADS = boundedConcurrencyProperty(
-            "lowyswamphut.maxSearchThreads", 4);
-    private static final int MAX_CONCURRENT_REAL_GENERATIONS = boundedConcurrencyProperty(
-            "lowyswamphut.maxConcurrentRealGenerations", 2);
-    private static final int MAX_CHUNK_CACHE_SIZE = boundedChunkCacheSize(
-            "lowyswamphut.maxChunkCacheSize", 1024);
+    private static final int MAX_SEARCH_THREADS = positiveIntProperty(
+            "lowyswamphut.maxSearchThreads",
+            Math.max(1, Runtime.getRuntime().availableProcessors()));
+    private static final int MAX_CONCURRENT_REAL_GENERATIONS = positiveIntProperty(
+            "lowyswamphut.maxConcurrentRealGenerations",
+            MAX_SEARCH_THREADS);
     private static final int MAX_SEARCH_AXIS_SPAN = positiveIntProperty(
             "lowyswamphut.maxSearchAxisSpan", 250_000);
     private static final long MAX_SEARCH_ITERATIONS = positiveLongProperty(
             "lowyswamphut.maxSearchIterations", 20_000_000_000L);
     private static final Semaphore REAL_GENERATION_PERMITS =
-            new Semaphore(MAX_CONCURRENT_REAL_GENERATIONS, true);
+            new Semaphore(MAX_CONCURRENT_REAL_GENERATIONS, false);
 
     private final SwampHut swampHut;
     private final GameVersion gameVersion;
@@ -506,7 +510,7 @@ public class SearchCoords {
                                 continue;
                             }
                             // 用 slopedCheese / 多点梯子预估地表，砍掉明显过高的候选，减少阶段2 SeedChecker 调用
-                            if (!passesDensityPrefilter(seed, hutX, hutZ, maxHeightInt, worldPresetMode)) {
+                            if (!passesDensityPrefilter(seed, hutX, hutZ, maxHeightInt, mcVersion, worldPresetMode)) {
                                 continue;
                             }
                             phase1Candidates.add(packChunkPos(pos.getX(), pos.getZ()));
@@ -649,15 +653,14 @@ public class SearchCoords {
         SeedChecker checker = resources.getStructureChecker();
         try {
             for (int y = -55; y <= 128; y++) {
-                boolean isFloor = checker.getBlock(hutX + 2, y, hutZ + 2) == Blocks.SPRUCE_PLANKS;
-                SeedCheckerCache.clearIfOversized(checker, metricsHook);
-                if (isFloor) {
+                if (checker.getBlock(hutX + 2, y, hutZ + 2) == Blocks.SPRUCE_PLANKS) {
                     return y;
                 }
             }
             return null;
         } finally {
-            resources.releaseStructureChecker();
+            // 只清空 chunk 缓存，不要销毁 SeedChecker（重建成本极高）
+            SeedCheckerCache.clear(checker, metricsHook);
         }
     }
 
@@ -684,7 +687,7 @@ public class SearchCoords {
             if (a < 0.25F || (a >= 0.5F && a < 0.75F)) {
                 for (int i = x; i < x + 7; i++) {
                     for (int j = z; j < z + 9; j++) {
-                        int columnTop = scanColumnTop(checker, i, j, startY, metricsHook);
+                        int columnTop = scanColumnTop(checker, i, j, startY);
                         totalHeight += columnTop;
                         columnsDone++;
                         if (cannotMeetMaxHeight(totalHeight, columnsDone, maxHeight)) {
@@ -695,7 +698,7 @@ public class SearchCoords {
             } else {
                 for (int i = x; i < x + 9; i++) {
                     for (int j = z; j < z + 7; j++) {
-                        int columnTop = scanColumnTop(checker, i, j, startY, metricsHook);
+                        int columnTop = scanColumnTop(checker, i, j, startY);
                         totalHeight += columnTop;
                         columnsDone++;
                         if (cannotMeetMaxHeight(totalHeight, columnsDone, maxHeight)) {
@@ -717,12 +720,9 @@ public class SearchCoords {
                 SearchMetricsHook.NO_OP);
     }
 
-    private static int scanColumnTop(SeedChecker checker, int i, int j, int startY,
-                                     SearchMetricsHook metricsHook) {
+    private static int scanColumnTop(SeedChecker checker, int i, int j, int startY) {
         for (int k = startY; k >= COLUMN_SCAN_MIN_Y; k--) {
-            boolean solid = !checker.getBlockState(i, k, j).isAir();
-            SeedCheckerCache.clearIfOversized(checker, metricsHook);
-            if (solid) {
+            if (!checker.getBlockState(i, k, j).isAir()) {
                 return k;
             }
         }
@@ -889,14 +889,6 @@ public class SearchCoords {
                 structureChecker = null;
             }
         }
-
-        void releaseStructureChecker() {
-            if (structureChecker != null) {
-                SeedCheckerCache.clear(structureChecker, metricsHook);
-                metricsHook.seedCheckerReleased(structureChecker);
-                structureChecker = null;
-            }
-        }
     }
 
     private static int boundedThreadCount(int requested) {
@@ -920,14 +912,6 @@ public class SearchCoords {
 
     private static int positiveIntProperty(String name, int defaultValue) {
         return Math.max(1, Integer.getInteger(name, defaultValue));
-    }
-
-    private static int boundedConcurrencyProperty(String name, int defaultValue) {
-        return Math.max(1, Math.min(4, Integer.getInteger(name, defaultValue)));
-    }
-
-    private static int boundedChunkCacheSize(String name, int defaultValue) {
-        return Math.max(512, Math.min(2048, Integer.getInteger(name, defaultValue)));
     }
 
     private static long positiveLongProperty(String name, long defaultValue) {
@@ -961,17 +945,6 @@ public class SearchCoords {
             }
             GENERATOR_FIELD = generator;
             CHUNK_MAP_FIELD = chunkMap;
-        }
-
-        static void clearIfOversized(SeedChecker checker, SearchMetricsHook metricsHook) {
-            Map<?, ?> chunks = chunks(checker);
-            if (chunks != null) {
-                metricsHook.chunkCacheObserved(checker, chunks.size());
-                if (chunks.size() > MAX_CHUNK_CACHE_SIZE) {
-                    chunks.clear();
-                    metricsHook.chunkCacheObserved(checker, 0);
-                }
-            }
         }
 
         static void clear(SeedChecker checker, SearchMetricsHook metricsHook) {
@@ -1082,15 +1055,47 @@ public class SearchCoords {
     }
 
     /**
-     * 阶段1→2 之间的 density 预筛：用含 slopedCheese 的洞穴 cheese + 多点梯子估高，
+     * 与 {@link #checkHeight} 相同的朝向判定：carver seed 后第一个 float
+     * 落在 [0,0.25)∪[0.5,0.75) → footprint 为 7×9（未转 90°）；
+     * 否则为 9×7（转 90°）。
+     */
+    static boolean isHutRotated90(long seed, int hutX, int hutZ, MCVersion mcVersion) {
+        long structureSeed = seed & 281474976710655L;
+        ChunkRand rand = new ChunkRand();
+        rand.setCarverSeed(structureSeed, hutX / 16, hutZ / 16, mcVersion);
+        float a = rand.nextFloat();
+        return !(a < 0.25F || (a >= 0.5F && a < 0.75F));
+    }
+
+    /**
+     * 将未旋转 7×9 局部坐标映射到世界块坐标（与 checkHeight 的轴对齐 footprint 一致）。
+     * 未转：世界 = 原点 + (lx, lz)，范围 7×9；
+     * 转 90°：世界 = 原点 + (lz, lx)，范围 9×7。
+     */
+    static void mapHutLocalToWorld(int hutX, int hutZ, int localX, int localZ, boolean rotated90, int[] outXZ) {
+        if (!rotated90) {
+            outXZ[0] = hutX + localX;
+            outXZ[1] = hutZ + localZ;
+        } else {
+            outXZ[0] = hutX + localZ;
+            outXZ[1] = hutZ + localX;
+        }
+    }
+
+    /**
+     * 阶段1→2 之间的 density 预筛：先定小屋朝向，再在 footprint 内用 5 点梯子估高。
      * 只剔除“确定过高”的候选，避免漏掉真低 y（允许少量假阳性进入阶段2）。
      */
-    static boolean passesDensityPrefilter(long seed, int hutX, int hutZ, int maxHeight, WorldPresetMode worldPresetMode) {
+    static boolean passesDensityPrefilter(long seed, int hutX, int hutZ, int maxHeight,
+                                          MCVersion mcVersion, WorldPresetMode worldPresetMode) {
+        boolean rotated90 = isHutRotated90(seed, hutX, hutZ, mcVersion);
+        int[] worldXZ = new int[2];
         int sum = 0;
-        for (int[] offset : DENSITY_PREFILTER_PROBE_OFFSETS) {
-            sum += estimateCheeseSurfaceLadder(seed, hutX + offset[0], hutZ + offset[1], worldPresetMode);
+        for (int[] local : DENSITY_PREFILTER_LOCAL_PROBES) {
+            mapHutLocalToWorld(hutX, hutZ, local[0], local[1], rotated90, worldXZ);
+            sum += estimateCheeseSurfaceLadder(seed, worldXZ[0], worldXZ[1], worldPresetMode);
         }
-        double mean = sum / (double) DENSITY_PREFILTER_PROBE_OFFSETS.length;
+        double mean = sum / (double) DENSITY_PREFILTER_LOCAL_PROBES.length;
         return !(mean > maxHeight + DENSITY_PREFILTER_HEIGHT_MARGIN);
     }
 
