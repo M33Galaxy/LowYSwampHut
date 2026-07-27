@@ -5,6 +5,7 @@ import com.seedfinding.mccore.util.pos.CPos;
 import com.seedfinding.mccore.version.MCVersion;
 import com.seedfinding.mcfeature.structure.SwampHut;
 import net.minecraft.block.Blocks;
+import net.minecraft.util.math.ChunkPos;
 import nl.jellejurre.seedchecker.SeedChecker;
 import nl.jellejurre.seedchecker.SeedCheckerDimension;
 import nl.jellejurre.seedchecker.TargetState;
@@ -74,6 +75,8 @@ public class SearchCoords {
     private static final int MAX_CONCURRENT_REAL_GENERATIONS = positiveIntProperty(
             "lowyswamphut.maxConcurrentRealGenerations",
             MAX_SEARCH_THREADS);
+    private static final int MAX_CHUNK_CACHE_SIZE = boundedChunkCacheSize(
+            "lowyswamphut.maxChunkCacheSize", 1_024);
     private static final int MAX_SEARCH_AXIS_SPAN = positiveIntProperty(
             "lowyswamphut.maxSearchAxisSpan", 250_000);
     private static final long MAX_SEARCH_ITERATIONS = positiveLongProperty(
@@ -653,7 +656,9 @@ public class SearchCoords {
         SeedChecker checker = resources.getStructureChecker();
         try {
             for (int y = -55; y <= 128; y++) {
-                if (checker.getBlock(hutX + 2, y, hutZ + 2) == Blocks.SPRUCE_PLANKS) {
+                boolean isFloor = checker.getBlock(hutX + 2, y, hutZ + 2) == Blocks.SPRUCE_PLANKS;
+                SeedCheckerCache.clearIfOversized(checker, hutX + 2, hutZ + 2, metricsHook);
+                if (isFloor) {
                     return y;
                 }
             }
@@ -687,7 +692,7 @@ public class SearchCoords {
             if (a < 0.25F || (a >= 0.5F && a < 0.75F)) {
                 for (int i = x; i < x + 7; i++) {
                     for (int j = z; j < z + 9; j++) {
-                        int columnTop = scanColumnTop(checker, i, j, startY);
+                        int columnTop = scanColumnTop(checker, i, j, startY, metricsHook);
                         totalHeight += columnTop;
                         columnsDone++;
                         if (cannotMeetMaxHeight(totalHeight, columnsDone, maxHeight)) {
@@ -698,7 +703,7 @@ public class SearchCoords {
             } else {
                 for (int i = x; i < x + 9; i++) {
                     for (int j = z; j < z + 7; j++) {
-                        int columnTop = scanColumnTop(checker, i, j, startY);
+                        int columnTop = scanColumnTop(checker, i, j, startY, metricsHook);
                         totalHeight += columnTop;
                         columnsDone++;
                         if (cannotMeetMaxHeight(totalHeight, columnsDone, maxHeight)) {
@@ -720,9 +725,12 @@ public class SearchCoords {
                 SearchMetricsHook.NO_OP);
     }
 
-    private static int scanColumnTop(SeedChecker checker, int i, int j, int startY) {
+    private static int scanColumnTop(SeedChecker checker, int i, int j, int startY,
+                                     SearchMetricsHook metricsHook) {
         for (int k = startY; k >= COLUMN_SCAN_MIN_Y; k--) {
-            if (!checker.getBlockState(i, k, j).isAir()) {
+            boolean solid = !checker.getBlockState(i, k, j).isAir();
+            SeedCheckerCache.clearIfOversized(checker, i, j, metricsHook);
+            if (solid) {
                 return k;
             }
         }
@@ -914,6 +922,10 @@ public class SearchCoords {
         return Math.max(1, Integer.getInteger(name, defaultValue));
     }
 
+    private static int boundedChunkCacheSize(String name, int defaultValue) {
+        return Math.max(512, Math.min(2_048, Integer.getInteger(name, defaultValue)));
+    }
+
     private static long positiveLongProperty(String name, long defaultValue) {
         try {
             return Math.max(1L, Long.parseLong(System.getProperty(name, Long.toString(defaultValue))));
@@ -945,6 +957,27 @@ public class SearchCoords {
             }
             GENERATOR_FIELD = generator;
             CHUNK_MAP_FIELD = chunkMap;
+        }
+
+        static void clearIfOversized(SeedChecker checker, int blockX, int blockZ,
+                                     SearchMetricsHook metricsHook) {
+            Map<?, ?> chunks = chunks(checker);
+            if (chunks != null) {
+                metricsHook.chunkCacheObserved(checker, chunks.size());
+                if (chunks.size() > MAX_CHUNK_CACHE_SIZE) {
+                    ChunkPos protectedChunk = new ChunkPos(
+                            Math.floorDiv(blockX, 16), Math.floorDiv(blockZ, 16));
+                    for (Object key : chunks.keySet()) {
+                        if (chunks.size() <= MAX_CHUNK_CACHE_SIZE) {
+                            break;
+                        }
+                        if (!protectedChunk.equals(key)) {
+                            chunks.remove(key);
+                        }
+                    }
+                    metricsHook.chunkCacheObserved(checker, chunks.size());
+                }
+            }
         }
 
         static void clear(SeedChecker checker, SearchMetricsHook metricsHook) {
