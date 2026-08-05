@@ -11,7 +11,7 @@ java {
     targetCompatibility = '17'
 }
 group 'org.example'
-version '1.4.1'
+version '1.5.0'
 repositories {
     mavenCentral()
     gradlePluginPortal()

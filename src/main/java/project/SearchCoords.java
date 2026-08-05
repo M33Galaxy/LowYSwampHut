@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
@@ -57,6 +58,11 @@ public class SearchCoords {
     };
     /** cheese 梯子向下探测的 Y 档位 */
     private static final int[] DENSITY_PREFILTER_LADDER_DOWN = {40, 30, 20, 10, 0, -10, -20, -30, -40, -50};
+    /**
+     * 阶段1粗筛 / 密度预筛的高度下限：选 -50 或 -54 时按 -50 处理，-54 不额外降低。
+     * 阶段2仍使用用户选定的真实 maxHeight。
+     */
+    private static final int PHASE1_MIN_CHECK_HEIGHT = -50;
     /** SeedChecker 列扫描起始 Y（必须足够高，否则会把高地表误判成低洞穴顶） */
     private static final int COLUMN_SCAN_START_Y = 200;
     /** SeedChecker 列扫描最低 Y */
@@ -94,6 +100,7 @@ public class SearchCoords {
     private volatile boolean isRunning = false;
     private volatile boolean isPaused = false;
     private volatile boolean coordinatorFinished = false;
+    private volatile CountDownLatch searchDone = new CountDownLatch(0);
     private final List<String> results = new ArrayList<>();
 
     // 保存当前搜索状态，用于动态调整线程数
@@ -156,6 +163,7 @@ public class SearchCoords {
         }
         isRunning = true;
         coordinatorFinished = false;
+        searchDone = new CountDownLatch(1);
         results.clear();
 
         long stage1Total = (long) (maxX - minX) * (maxZ - minZ);
@@ -182,59 +190,94 @@ public class SearchCoords {
         AtomicLong processedCount = new AtomicLong(0);
         currentProcessedCount = processedCount;
 
-        // 启动进度监控线程（贯穿两阶段）
+        final CountDownLatch doneLatch = searchDone;
+
+        // 进度监控线程：仅在有回调时启动（批量种子并行可传 null 以省开销）
         long startTime = System.currentTimeMillis();
         AtomicLong pausedTime = new AtomicLong(0);
         AtomicReference<Long> pauseStartTime = new AtomicReference<>(0L);
-        progressThread = new Thread(() -> {
-            while (isRunning && !coordinatorFinished) {
-                try {
-                    Thread.sleep(100);
-                    reportProgress(progressCallback, startTime, pausedTime, pauseStartTime, false);
-                } catch (InterruptedException e) {
-                    break;
+        if (progressCallback != null) {
+            progressThread = new Thread(() -> {
+                while (isRunning && !coordinatorFinished) {
+                    try {
+                        Thread.sleep(100);
+                        reportProgress(progressCallback, startTime, pausedTime, pauseStartTime, false);
+                    } catch (InterruptedException e) {
+                        break;
+                    }
                 }
+                reportProgress(progressCallback, startTime, pausedTime, pauseStartTime, true);
+            });
+            progressThread.setDaemon(true);
+            progressThread.start();
+        } else {
+            progressThread = null;
+        }
+
+        // 批量「1 线程/种子」：在调用线程同步跑完，避免每种子再开协调线程
+        if (progressCallback == null && searchThreadCount <= 1) {
+            runCoordinator(seed, searchThreadCount, minX, maxX, minZ, maxZ, maxHeight,
+                    processedCount, resultCallback, checkGeneration, doneLatch);
+            return;
+        }
+
+        new Thread(() -> runCoordinator(seed, searchThreadCount, minX, maxX, minZ, maxZ, maxHeight,
+                processedCount, resultCallback, checkGeneration, doneLatch),
+                "SearchCoords-Coordinator").start();
+    }
+
+    private void runCoordinator(long seed, int searchThreadCount, int minX, int maxX, int minZ, int maxZ,
+                                double maxHeight, AtomicLong processedCount, Consumer<String> resultCallback,
+                                boolean checkGeneration, CountDownLatch doneLatch) {
+        try {
+            runPhase1(seed, searchThreadCount, minX, maxX, minZ, maxZ, maxHeight, processedCount);
+            if (!isRunning) {
+                return;
             }
-            reportProgress(progressCallback, startTime, pausedTime, pauseStartTime, true);
-        });
-        progressThread.setDaemon(true);
-        progressThread.start();
 
-        // 协调线程：阶段1 → 排序 → 阶段2
-        new Thread(() -> {
-            try {
-                runPhase1(seed, searchThreadCount, minX, maxX, minZ, maxZ, maxHeight, processedCount);
-                if (!isRunning) {
-                    return;
-                }
-
-                List<CPos> sorted = new ArrayList<>(phase1Candidates.size());
-                for (Long key : phase1Candidates) {
-                    sorted.add(unpackChunkPos(key));
-                }
-                sorted.sort(Comparator.comparingLong(pos -> {
-                    long hx = 16L * pos.getX();
-                    long hz = 16L * pos.getZ();
-                    return hx * hx + hz * hz;
-                }));
-                phase2Candidates = sorted;
-                phase2Cursor = new AtomicInteger(0);
-
-                AtomicLong stage2Processed = new AtomicLong(0);
-                currentProcessedCount = stage2Processed;
-                beginStage(2, sorted.size());
-
-                if (!sorted.isEmpty() && isRunning) {
-                    runPhase2(seed, searchThreadCount, maxHeight, stage2Processed, resultCallback, checkGeneration);
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            } finally {
-                shutdownExecutor();
-                isRunning = false;
-                coordinatorFinished = true;
+            List<CPos> sorted = new ArrayList<>(phase1Candidates.size());
+            for (Long key : phase1Candidates) {
+                sorted.add(unpackChunkPos(key));
             }
-        }, "SearchCoords-Coordinator").start();
+            sorted.sort(Comparator.comparingLong(pos -> {
+                long hx = 16L * pos.getX();
+                long hz = 16L * pos.getZ();
+                return hx * hx + hz * hz;
+            }));
+            phase2Candidates = sorted;
+            phase2Cursor = new AtomicInteger(0);
+
+            AtomicLong stage2Processed = new AtomicLong(0);
+            currentProcessedCount = stage2Processed;
+            beginStage(2, sorted.size());
+
+            if (!sorted.isEmpty() && isRunning) {
+                runPhase2(seed, searchThreadCount, maxHeight, stage2Processed, resultCallback, checkGeneration);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            shutdownExecutor();
+            isRunning = false;
+            coordinatorFinished = true;
+            doneLatch.countDown();
+        }
+    }
+
+    /**
+     * 阻塞直到本次搜索完成（协调线程结束）。适合批量种子搜索，替代 sleep 轮询。
+     */
+    public void awaitCompletion() {
+        try {
+            searchDone.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** 阶段1粗筛 / 密度预筛用高度：-54 按 -50 处理，不额外降低。 */
+    static int phase1CheckHeight(int maxHeight) {
+        return Math.max(maxHeight, PHASE1_MIN_CHECK_HEIGHT);
     }
 
     private void beginStage(int stage, long totalTasks) {
@@ -287,10 +330,8 @@ public class SearchCoords {
                 phase1Candidates.clear();
             }
             processedCount.set(0);
-            // 阶段1因调线程重跑时，重置本阶段计时
             beginStage(1, currentTotalTasks);
             int poolSize = currentThreadCount > 0 ? currentThreadCount : threadCount;
-            ensureExecutor(poolSize);
             int totalX = maxX - minX;
             int chunkSize = Math.max(1, totalX / poolSize);
             List<Runnable> tasks = new ArrayList<>(poolSize);
@@ -299,7 +340,7 @@ public class SearchCoords {
                 int endX = (i == poolSize - 1) ? maxX : startX + chunkSize;
                 tasks.add(new Phase1RegionChecker(seed, startX, endX, minZ, maxZ, maxHeight, processedCount));
             }
-            runTasksAndWait(tasks);
+            runTasksAndWait(tasks, poolSize);
         } while (isRunning && phase1AdjustPending);
     }
 
@@ -307,19 +348,23 @@ public class SearchCoords {
                            Consumer<String> resultCallback, boolean checkGeneration) throws InterruptedException {
         do {
             phase2AdjustPending = false;
-            // 阶段2因调线程重开线程池时，保留已完成进度与计时（游标不回退）
             int poolSize = currentThreadCount > 0 ? currentThreadCount : threadCount;
-            ensureExecutor(poolSize);
             Consumer<String> callback = currentResultCallback != null ? currentResultCallback : resultCallback;
             List<Runnable> tasks = new ArrayList<>(poolSize);
             for (int i = 0; i < poolSize; i++) {
                 tasks.add(new Phase2CandidateChecker(seed, maxHeight, processedCount, callback, currentCheckGeneration));
             }
-            runTasksAndWait(tasks);
+            runTasksAndWait(tasks, poolSize);
         } while (isRunning && phase2AdjustPending);
     }
 
-    private void runTasksAndWait(List<Runnable> tasks) throws InterruptedException {
+    private void runTasksAndWait(List<Runnable> tasks, int poolSize) throws InterruptedException {
+        // 单线程：在当前线程直接跑，避免每种子 newFixedThreadPool(1) 的创建/销毁开销
+        if (poolSize <= 1 && tasks.size() == 1) {
+            tasks.get(0).run();
+            return;
+        }
+        ensureExecutor(poolSize);
         List<java.util.concurrent.Future<?>> futures = new ArrayList<>(tasks.size());
         for (Runnable task : tasks) {
             futures.add(executor.submit(task));
@@ -373,6 +418,11 @@ public class SearchCoords {
         }
         if (progressThread != null) {
             progressThread.interrupt();
+        }
+        // 确保 awaitCompletion 不会因协调线程延迟而永久阻塞
+        CountDownLatch done = searchDone;
+        if (done != null) {
+            done.countDown();
         }
     }
 
@@ -497,7 +547,8 @@ public class SearchCoords {
         public void run() {
             metricsHook.regionWorkerStarted();
             try {
-                int maxHeightInt = (int) maxHeight;
+                // -54 在阶段1 / 密度预筛按 -50；阶段2仍用真实 maxHeight
+                int phase1Height = phase1CheckHeight((int) maxHeight);
                 // 阶段1不清理 ThreadLocal，供同线程池进入阶段2时复用噪声缓存
                 for (int x = startX; x < endX && isRunning; x++) {
                     for (int z = minZ; z < maxZ && isRunning; z++) {
@@ -509,11 +560,11 @@ public class SearchCoords {
                             CPos pos = swampHut.getInRegion(seed, x, z, rand);
                             int hutX = 16 * pos.getX();
                             int hutZ = 16 * pos.getZ();
-                            if (!SearchCoords.this.check(seed, hutX, hutZ, maxHeightInt)) {
+                            if (!SearchCoords.this.check(seed, hutX, hutZ, phase1Height)) {
                                 continue;
                             }
                             // 用 slopedCheese / 多点梯子预估地表，砍掉明显过高的候选，减少阶段2 SeedChecker 调用
-                            if (!passesDensityPrefilter(seed, hutX, hutZ, maxHeightInt, mcVersion, worldPresetMode)) {
+                            if (!passesDensityPrefilter(seed, hutX, hutZ, phase1Height, mcVersion, worldPresetMode)) {
                                 continue;
                             }
                             phase1Candidates.add(packChunkPos(pos.getX(), pos.getZ()));
@@ -789,12 +840,13 @@ public class SearchCoords {
         if (Entrance(seed, heightX, 60, heightZ, worldPresetMode) >= 0) {
             return false;
         }
-        // 检查maxHeight本身
+        // 检查maxHeight本身（调用方应对 -54 传入 phase1CheckHeight=-50）
         if (Entrance2(seed, heightX, maxHeight, heightZ, worldPresetMode) >= 0 && Cheese(seed, heightX, maxHeight, heightZ, worldPresetMode) >= 0) {
             return false;
         }
-        // 0以下使用Entrance2
-        for (int y = 0; y >= -40; y -= 10) {
+        // 0以下使用Entrance2；选 -50/-54 时梯子下限为 -50，其余仍为 -40
+        int ladderFloor = Math.max(PHASE1_MIN_CHECK_HEIGHT, Math.min(-40, maxHeight));
+        for (int y = 0; y >= ladderFloor; y -= 10) {
             if (maxHeight < y) {
                 if (Entrance2(seed, heightX, y, heightZ, worldPresetMode) >= 0 && Cheese(seed, heightX, y, heightZ, worldPresetMode) >= 0) {
                     return false;
