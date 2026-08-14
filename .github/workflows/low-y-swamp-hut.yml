@@ -1,0 +1,50 @@
+name: Find Lowest Y Swamp Hut
+
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: '种子号码'
+        required: true
+        default: '-1421144132636065691'
+      max_y:
+        description: '最大Y坐标（默认 -40）'
+        required: true
+        default: '-40'
+      check_gen:
+        description: '是否精确检查生成（true/false）'
+        required: false
+        default: 'false'
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 构建 shadowJar（包含所有依赖）
+        run: |
+          chmod +x gradlew
+          ./gradlew shadowJar
+
+      - name: 运行 CLI 搜索
+        run: |
+          java -jar build/libs/LowYSwampHut.jar \
+            --seed ${{ github.event.inputs.seed }} \
+            --max-y ${{ github.event.inputs.max_y }} \
+            --check-gen ${{ github.event.inputs.check_gen }} \
+            --threads 2 \
+            --output result.txt
+
+      - name: 上传结果
+        uses: actions/upload-artifact@v4
+        with:
+          name: swamp-hut-result
+          path: result.txt

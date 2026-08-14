@@ -1,102 +1,51 @@
-import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
-import com.github.jengelman.gradle.plugins.shadow.transformers.Log4j2PluginsCacheFileTransformer
-import com.github.jengelman.gradle.plugins.shadow.transformers.PropertiesFileTransformer
-
 plugins {
     id 'java'
+    id 'application'
     id 'com.github.johnrengelman.shadow' version '8.1.1'
 }
+
+group = 'project'
+version = '1.0'
+
 java {
-    sourceCompatibility = '17'
-    targetCompatibility = '17'
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
 }
-group 'org.example'
-version '1.5.0'
+
 repositories {
     mavenCentral()
-    gradlePluginPortal()
-    maven {
-        url "https://maven.seedfinding.com"
-        }
-
-    maven {
-        url "https://maven.latticg.com"
-        }
-
-    maven {
-
-        url "https://jitpack.io"
-
-        }
-    maven {url "https://repo.jellejurre.dev"}
-
+    maven { url = "https://maven.seedfinding.com" }
+    maven { url = "https://maven.latticg.com" }
+    maven { url = "https://jitpack.io" }
+    maven { url = "https://repo.jellejurre.dev" }
 }
+
 dependencies {
-    implementation('com.seedfinding:mc_seed:1.171.2')
     implementation('com.seedfinding:mc_core:1.210.0')
     implementation('com.seedfinding:mc_feature:1.171.9')
-    implementation('com.github.jellejurre:seed-checker:1.2.0-1.18.1'){transitive=false}
-    implementation 'com.github.KalleStruik:noise-sampler:1.20.0'
-
-
-    implementation('com.seedfinding:latticg:1.06@jar')
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.8.1'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.8.1'
-
-}
-test {
-    useJUnitPlatform()
+    implementation('com.github.jellejurre:seed-checker:1.2.0-1.18.1') {
+        transitive = false
+    }
+    implementation 'org.apache.logging.log4j:log4j-api:2.20.0'
+    implementation 'org.apache.logging.log4j:log4j-core:2.20.0'
 }
 
-// 源文件为 UTF-8 时必须指定编码，否则 Windows 下 javac 默认 GBK 会破坏中文等字面量
-tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8'
+application {
+    mainClass = 'project.Launcher'
 }
 
-// 配置 Shadow JAR
 shadowJar {
     archiveBaseName.set('LowYSwampHut')
     archiveClassifier.set('')
-    mergeServiceFiles()
-}
-
-// 创建 LowYSwampHutForFixedSeed 的可执行 JAR
-tasks.register('buildMainJar', ShadowJar) {
-    group = 'build'
-    description = 'Creates a fat JAR for LowYSwampHutForFixedSeed'
-    archiveBaseName.set('LowYSwampHutForFixedSeedGUI')
-    archiveClassifier.set('')
-    from sourceSets.main.output
-    configurations = [project.configurations.runtimeClasspath]
+    archiveVersion.set('')
     manifest {
-        attributes 'Main-Class': 'project.Launcher'
-        attributes 'Multi-Release': 'true'
+        attributes 'Main-Class': 'project.CmdLineRunner'
     }
     mergeServiceFiles()
-    transform(Log4j2PluginsCacheFileTransformer)
-    transform(PropertiesFileTransformer) {
-        paths = ['META-INF/spring.handlers', 'META-INF/spring.schemas']
-        mergeStrategy = "append"
-    }
-    // 注意：不要排除 META-INF/versions/**，因为 Multi-Release JAR 需要这些文件
-    exclude 'module-info.class'
+    transform(com.github.jengelman.gradle.plugins.shadow.transformers.Log4j2PluginsCacheFileTransformer)
+    exclude 'META-INF/*.RSA', 'META-INF/*.SF', 'META-INF/*.DSA'
 }
 
-// 创建所有 JAR 的任务
-tasks.register('buildAllJars') {
-    group = 'build'
-    description = 'Builds all executable JARs'
-    dependsOn buildMainJar
-}
-
-['A', 'B', 'C'].each { profile ->
-    tasks.register("benchmark${profile}", JavaExec) {
-        group = 'verification'
-        description = "Runs LowYSwampHut stress profile ${profile}"
-        dependsOn testClasses
-        classpath = sourceSets.test.runtimeClasspath
-        mainClass.set('project.benchmark.BenchmarkRunner')
-        args "--profile=${profile}"
-        jvmArgs '-Xms2g', '-Xmx4g'
-    }
+tasks.named('build').configure {
+    dependsOn shadowJar
 }
