@@ -24,14 +24,10 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     private static final int DEFAULT_MIN_Z = -58594;
     private static final int DEFAULT_MAX_Z = 58593;
     // 默认值 - 从种子列表搜索
-    private static final int DEFAULT_LIST_MIN_X = -128;
-    private static final int DEFAULT_LIST_MAX_X = 128;
-    private static final int DEFAULT_LIST_MIN_Z = -128;
-    private static final int DEFAULT_LIST_MAX_Z = 128;
-    /** 批量搜索：区域格数低于此值时按种子并行（每种子 1 线程），避免每种子反复建/毁大线程池 */
-    private static final long LIST_SEED_PARALLEL_MAX_AREA = 150_000L;
-    /** 大范围单种子内：每线程目标区域格数 */
-    private static final long TARGET_CELLS_PER_THREAD = 4096L;
+    private static final int DEFAULT_LIST_MIN_X = ListSearchSupport.DEFAULT_MIN_X;
+    private static final int DEFAULT_LIST_MAX_X = ListSearchSupport.DEFAULT_MAX_X;
+    private static final int DEFAULT_LIST_MIN_Z = ListSearchSupport.DEFAULT_MIN_Z;
+    private static final int DEFAULT_LIST_MAX_Z = ListSearchSupport.DEFAULT_MAX_Z;
     /** 结果区 UI 批量刷新间隔，减轻 EDT 卡顿 */
     private static final long LIST_RESULT_UI_FLUSH_MS = 250L;
 
@@ -147,26 +143,9 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     private Locale currentLocale;
 
     public LowYSwampHutForFixedSeed() {
-        // 初始化ResourceBundle，根据系统语言选择
-        Locale systemLocale = Locale.getDefault();
-        // 如果系统语言是中文（zh-cn、zh-hk、zh-tw），使用中文资源，否则使用英文
-        if (systemLocale.getLanguage().equals("zh")) {
-            String country = systemLocale.getCountry().toLowerCase();
-            if (country.equals("cn") || country.equals("hk") || country.equals("tw")) {
-                currentLocale = new Locale("zh", "CN");
-            } else {
-                currentLocale = new Locale("en", "US");
-            }
-        } else {
-            currentLocale = new Locale("en", "US");
-        }
-        try {
-            messages = ResourceBundle.getBundle("messages", currentLocale);
-        } catch (Exception e) {
-            // 如果加载失败，使用默认的英文
-            currentLocale = new Locale("en", "US");
-            messages = ResourceBundle.getBundle("messages", currentLocale);
-        }
+        AppLocale appLocale = AppLocale.load();
+        currentLocale = appLocale.locale();
+        messages = appLocale.bundle();
 
         setTitle(getString("window.title"));
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -2251,35 +2230,12 @@ public class LowYSwampHutForFixedSeed extends JFrame {
 
     /** 仅统计有效种子行数，不把种子载入内存 */
     private long countValidSeeds(File file) throws IOException {
-        long count = 0;
-        try (BufferedReader reader = new BufferedReader(new FileReader(file), 1 << 20)) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (!isListSearchRunning) {
-                    break;
-                }
-                if (parseSeedLine(line) != null) {
-                    count++;
-                }
-            }
-        }
-        return count;
+        return ListSearchSupport.countValidSeeds(file, () -> isListSearchRunning);
     }
 
     /** @return 解析成功的种子，无效行返回 null */
     private static Long parseSeedLine(String line) {
-        if (line == null) {
-            return null;
-        }
-        line = line.trim();
-        if (line.isEmpty() || line.charAt(0) == '#') {
-            return null;
-        }
-        try {
-            return Long.parseLong(line);
-        } catch (NumberFormatException e) {
-            return null;
-        }
+        return ListSearchSupport.parseSeedLine(line);
     }
 
     private void restoreListSearchUiIdle() {
@@ -2893,19 +2849,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     }
 
     private static int computeConcurrentSeeds(long area, int threadCount) {
-        if (threadCount < 1) {
-            return 1;
-        }
-        // 中小范围（如边长 257≈6.6 万格）：多种子×1 线程，避免「单种子吃满线程」导致每种子创建十几个 OS 线程
-        if (area <= LIST_SEED_PARALLEL_MAX_AREA) {
-            return threadCount;
-        }
-        return (int) Math.min(threadCount,
-                Math.max(1L, threadCount / Math.max(1L, area / TARGET_CELLS_PER_THREAD)));
+        return ListSearchSupport.computeConcurrentSeeds(area, threadCount);
     }
 
     private static int computeThreadsPerSeed(int threadCount, int concurrentSeeds) {
-        return Math.max(1, threadCount / Math.max(1, concurrentSeeds));
+        return ListSearchSupport.computeThreadsPerSeed(threadCount, concurrentSeeds);
     }
 
     private void stopAllListSearchers() {

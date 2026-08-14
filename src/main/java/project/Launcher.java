@@ -66,8 +66,27 @@ public class Launcher {
             e.printStackTrace();
         }
 
-        // 调用实际的 main 方法
-        LowYSwampHutForFixedSeed.main(args);
+        if (isCliInvocation(args)) {
+            CmdLineRunner.run(args);
+        } else {
+            LowYSwampHutForFixedSeed.main(args);
+        }
+    }
+
+    private static boolean isCliInvocation(String[] args) {
+        for (String arg : args) {
+            switch (arg) {
+                case "--seed", "-s", "--help", "-h",
+                        "--max-y", "--min-x", "--max-x", "--min-z", "--max-z", "--square-side",
+                        "--version", "--preset", "--output", "-o", "--threads", "--check-gen",
+                        "--no-progress", "--seeds-file", "-f", "--export-seeds", "--lang" -> {
+                    return true;
+                }
+                default -> {
+                }
+            }
+        }
+        return false;
     }
 }
 

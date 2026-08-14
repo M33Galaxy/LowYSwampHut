@@ -134,6 +134,132 @@ The search will process each seed in the list sequentially. The progress bar sho
 
 **重置搜索区域为默认值**：将坐标范围重置为默认值（-128 到 128）。
 
+### Command Line / 命令行
+
+The same JAR supports both the GUI and command-line search. **Launching without arguments opens the GUI.** To search from the command line, pass `--seed` and optional parameters.
+
+同一个 JAR 同时支持图形界面与命令行搜索。**不带参数启动时打开 GUI。** 命令行搜索需传入 `--seed` 及可选参数。
+
+Build the executable JAR first:
+
+先构建可执行 JAR：
+
+```bash
+./gradlew shadowJar
+```
+
+The output file is `build/libs/LowYSwampHut.jar`.
+
+输出文件为 `build/libs/LowYSwampHut.jar`。
+
+**Basic usage / 基本用法**
+
+```bash
+java -jar LowYSwampHut.jar --seed -1421144132636065691
+```
+
+**Common options / 常用参数**
+
+| Option                      | Description / 说明                      | Default / 默认值                |
+| --------------------------- | --------------------------------------- | ------------------------------- |
+| `--seed`, `-s`              | Single seed / 单种子搜索                | One of `--seed` or `--seeds-file` / 与种子列表二选一 |
+| `--seeds-file`, `-f`        | Seed list file / 种子列表文件（每行一个） | One of `--seed` or `--seeds-file` / 与单种子二选一 |
+| `--max-y`                   | Max Swamp Hut Y filter / 女巫小屋最大 Y | `-40`                           |
+| `--threads`                 | Thread count / 线程数                   | CPU core count / CPU 核心数     |
+| `--version`                 | Minecraft version / 版本                | `26.2`                          |
+| `--preset`                  | World preset / 世界类型                 | `normal`                        |
+| `--check-gen [true\|false]` | Precise generation check / 精确检查生成 | `true`                          |
+| `--lang zh\|en`             | Language override / 覆盖语言            | System default / 跟随系统（与 GUI 相同规则） |
+| `--output`, `-o`            | Full results file / 完整结果文件        | `result.txt`                    |
+| `--export-seeds`            | Export hit seeds only / 仅导出命中种子  | Off / 不导出                    |
+| `--no-progress`             | Disable progress output / 关闭进度输出  | progress enabled / 默认显示进度 |
+
+**Version values / 版本可选值:** `26.2`, `1.21.x~26.1`, `1.20.x`, `1.19.x`, `1.18.x`
+
+**Preset values / 世界类型可选值:** `normal` (普通世界), `large-biomes` (巨型生物群系), `single-biome` (单生物群系(沼泽))
+
+**Search area / 搜索范围**
+
+If you do not specify any range options:
+
+若不指定范围参数：
+
+- **Single seed / 单种子**: full world boundary (`-58594 ~ 58593`), same as the GUI single-seed tab.
+- **Seed list / 多种子**: `-128 ~ 128`, same as the GUI seed-list tab.
+
+| Option                                     | Description / 说明                                           |
+| ------------------------------------------ | ------------------------------------------------------------ |
+| `--min-x`, `--max-x`, `--min-z`, `--max-z` | Custom coordinate bounds / 自定义坐标范围                    |
+| `--square-side`                            | Square side length centered at (0, 0); overrides min/max / 以 (0,0) 为中心的正方形边长，会覆盖 min/max |
+
+**Examples / 示例**
+
+Search the full world:
+
+搜索整个世界：
+
+```bash
+java -jar LowYSwampHut.jar --seed 123456789
+```
+
+Search a 1024×1024 area centered at origin:
+
+搜索以原点为中心的 1024×1024 区域：
+
+```bash
+java -jar LowYSwampHut.jar --seed 123456789 --square-side 1024 --max-y -40
+```
+
+Search a custom rectangle:
+
+搜索自定义矩形区域：
+
+```bash
+java -jar LowYSwampHut.jar --seed 123456789 --min-x -128 --max-x 128 --min-z -128 --max-z 128
+```
+
+Disable precise generation check (enabled by default) and write results to a file:
+
+关闭精确检查（默认开启）并写入文件：
+
+```bash
+java -jar LowYSwampHut.jar --seed 123456789 --check-gen false --threads 8 -o result.txt
+```
+
+Search from a seed list (one seed per line) and export both full results and hit seeds:
+
+从种子列表搜索（每行一个种子），同时导出完整结果和命中种子：
+
+```bash
+java -jar LowYSwampHut.jar --seeds-file seeds.txt -o result.txt --export-seeds hits.txt
+```
+
+CLI language follows the same rule as the GUI: Simplified/Traditional Chinese system locales use Chinese, otherwise English. Override with `--lang zh` or `--lang en`. The detected language is printed at startup.
+
+命令行语言规则与 GUI 相同：系统为中文（简体/香港/台湾）时用中文，否则英文。可用 `--lang zh` 或 `--lang en` 覆盖。启动时会打印检测到的默认语言。
+
+During CLI search, progress is printed to the terminal (stage, processed/total, elapsed time, remaining time, result count), similar to the GUI progress bar.
+
+命令行搜索时，终端会输出进度（阶段、已完成/总量、已过时间、剩余时间、结果数），与 GUI 进度条信息类似。
+
+Show all CLI options:
+
+查看全部命令行参数：
+
+```bash
+java -jar LowYSwampHut.jar --help
+```
+
+### GitHub Actions / GitHub 自动运行
+
+The repository includes a manual workflow: **Find Lowest Y Swamp Hut**. Open **Actions** → select the workflow → **Run workflow**. It supports single-seed and seed-list CLI options. For a seed list, put the file in the repository and set `seeds_file`. Results are uploaded as artifacts (`result.txt`, and `hits.txt` when exporting seeds).
+
+仓库包含手动触发的工作流：**Find Lowest Y Swamp Hut**。打开 **Actions** → 选择该工作流 → **Run workflow**。支持单种子和多种子。多种子时将列表文件放进仓库并填写 `seeds_file`。结果会作为产物上传。
+
+GitHub-hosted runners have limited CPU/time (about 2 cores, 6 hours). Prefer a smaller `--square-side` or coordinate range; a full-world search may time out.
+
+GitHub 托管 runner 的 CPU 和时间有限（约 2 核、6 小时）。建议缩小 `--square-side` 或坐标范围；全图搜索可能会超时。
+
 ## Features / 功能特点
 
 - **Multi-threaded search**: Supports multi-threaded parallel search to improve efficiency

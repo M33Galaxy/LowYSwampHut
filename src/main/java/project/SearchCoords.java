@@ -34,6 +34,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -201,12 +202,15 @@ public class SearchCoords {
                 while (isRunning && !coordinatorFinished) {
                     try {
                         Thread.sleep(100);
+                        if (!isRunning || coordinatorFinished) {
+                            return;
+                        }
                         reportProgress(progressCallback, startTime, pausedTime, pauseStartTime, false);
                     } catch (InterruptedException e) {
-                        break;
+                        Thread.currentThread().interrupt();
+                        return;
                     }
                 }
-                reportProgress(progressCallback, startTime, pausedTime, pauseStartTime, true);
             });
             progressThread.setDaemon(true);
             progressThread.start();
@@ -221,9 +225,11 @@ public class SearchCoords {
             return;
         }
 
-        new Thread(() -> runCoordinator(seed, searchThreadCount, minX, maxX, minZ, maxZ, maxHeight,
+        Thread coordinator = new Thread(() -> runCoordinator(seed, searchThreadCount, minX, maxX, minZ, maxZ, maxHeight,
                 processedCount, resultCallback, checkGeneration, doneLatch),
-                "SearchCoords-Coordinator").start();
+                "SearchCoords-Coordinator");
+        coordinator.setDaemon(true);
+        coordinator.start();
     }
 
     private void runCoordinator(long seed, int searchThreadCount, int minX, int maxX, int minZ, int maxZ,
@@ -257,10 +263,13 @@ public class SearchCoords {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } finally {
-            shutdownExecutor();
             isRunning = false;
             coordinatorFinished = true;
+            if (progressThread != null) {
+                progressThread.interrupt();
+            }
             doneLatch.countDown();
+            shutdownExecutor();
         }
     }
 
@@ -348,7 +357,14 @@ public class SearchCoords {
                            Consumer<String> resultCallback, boolean checkGeneration) throws InterruptedException {
         do {
             phase2AdjustPending = false;
-            int poolSize = currentThreadCount > 0 ? currentThreadCount : threadCount;
+            int remaining = remainingPhase2Candidates();
+            if (remaining <= 0 || !isRunning) {
+                break;
+            }
+            // 候选往往远少于搜索线程。若仍按线程数开 worker，空闲线程会先预热 SeedChecker，
+            // 进度已满后协调线程仍要等它们初始化结束，CLI 的 awaitCompletion 就会卡住。
+            int requested = currentThreadCount > 0 ? currentThreadCount : threadCount;
+            int poolSize = Math.min(requested, remaining);
             Consumer<String> callback = currentResultCallback != null ? currentResultCallback : resultCallback;
             List<Runnable> tasks = new ArrayList<>(poolSize);
             for (int i = 0; i < poolSize; i++) {
@@ -356,6 +372,13 @@ public class SearchCoords {
             }
             runTasksAndWait(tasks, poolSize);
         } while (isRunning && phase2AdjustPending);
+    }
+
+    private int remainingPhase2Candidates() {
+        if (phase2Candidates == null || phase2Cursor == null) {
+            return 0;
+        }
+        return Math.max(0, phase2Candidates.size() - phase2Cursor.get());
     }
 
     private void runTasksAndWait(List<Runnable> tasks, int poolSize) throws InterruptedException {
@@ -387,24 +410,38 @@ public class SearchCoords {
         if (executor != null && !executor.isShutdown()) {
             executor.shutdownNow();
             try {
-                executor.awaitTermination(30, TimeUnit.SECONDS);
+                executor.awaitTermination(2, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
         }
-        executor = Executors.newFixedThreadPool(poolSize);
+        executor = Executors.newFixedThreadPool(poolSize, searchWorkerFactory());
         executorPoolSize = poolSize;
     }
 
+    private static ThreadFactory searchWorkerFactory() {
+        AtomicInteger index = new AtomicInteger(1);
+        return runnable -> {
+            Thread thread = new Thread(runnable, "SearchCoords-Worker-" + index.getAndIncrement());
+            thread.setDaemon(true);
+            return thread;
+        };
+    }
+
     private void shutdownExecutor() {
-        if (executor != null && !executor.isShutdown()) {
-            executor.shutdown();
-            try {
-                executor.awaitTermination(30, TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+        if (executor == null) {
+            executorPoolSize = 0;
+            return;
+        }
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
                 executor.shutdownNow();
+                executor.awaitTermination(1, TimeUnit.SECONDS);
             }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            executor.shutdownNow();
         }
         executorPoolSize = 0;
     }
@@ -600,11 +637,6 @@ public class SearchCoords {
         public void run() {
             metricsHook.regionWorkerStarted();
             try {
-                // 预热 SeedChecker，避免首个候选承担全部初始化成本
-                getThreadResources(seed, worldPresetMode, metricsHook).getTerrainChecker();
-                if (worldPresetMode != WorldPresetMode.SINGLE_BIOME && checkGeneration) {
-                    getThreadResources(seed, worldPresetMode, metricsHook).getStructureChecker();
-                }
                 while (isRunning) {
                     waitIfPaused();
                     if (!isRunning) {

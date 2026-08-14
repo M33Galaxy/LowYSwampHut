@@ -4,21 +4,58 @@ on:
   workflow_dispatch:
     inputs:
       seed:
-        description: '种子号码'
-        required: true
+        description: '单种子号码（填写 seeds_file 时可留空）'
+        required: false
         default: '-1421144132636065691'
+      seeds_file:
+        description: '仓库内种子列表路径（填写后走多种子搜索）'
+        required: false
+        default: ''
       max_y:
         description: '最大Y坐标（默认 -40）'
         required: true
         default: '-40'
-      check_gen:
-        description: '是否精确检查生成（true/false）'
+      threads:
+        description: '线程数（GitHub runner 建议 2）'
         required: false
-        default: 'false'
+        default: '2'
+      version:
+        description: 'Minecraft 版本（26.2 / 1.21.x~26.1 / 1.20.x / 1.19.x / 1.18.x）'
+        required: false
+        default: '26.2'
+      preset:
+        description: '世界类型（normal / large-biomes / single-biome）'
+        required: false
+        default: 'normal'
+      check_gen:
+        description: '是否精确检查生成（true/false，默认 true）'
+        required: false
+        default: 'true'
+      square_side:
+        description: '正方形区域边长（留空则用 min/max 或模式默认范围）'
+        required: false
+        default: ''
+      min_x:
+        description: 'MinX（留空=单种子世界边界 / 多种子 -128）'
+        required: false
+        default: ''
+      max_x:
+        description: 'MaxX（留空=单种子世界边界 / 多种子 128）'
+        required: false
+        default: ''
+      min_z:
+        description: 'MinZ（留空=单种子世界边界 / 多种子 -128）'
+        required: false
+        default: ''
+      max_z:
+        description: 'MaxZ（留空=单种子世界边界 / 多种子 128）'
+        required: false
+        default: ''
 
 jobs:
   search:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -35,16 +72,50 @@ jobs:
           ./gradlew shadowJar
 
       - name: 运行 CLI 搜索
+        env:
+          SEED: ${{ github.event.inputs.seed }}
+          SEEDS_FILE: ${{ github.event.inputs.seeds_file }}
+          MAX_Y: ${{ github.event.inputs.max_y }}
+          THREADS: ${{ github.event.inputs.threads }}
+          VERSION: ${{ github.event.inputs.version }}
+          PRESET: ${{ github.event.inputs.preset }}
+          CHECK_GEN: ${{ github.event.inputs.check_gen }}
+          SQUARE_SIDE: ${{ github.event.inputs.square_side }}
+          MIN_X: ${{ github.event.inputs.min_x }}
+          MAX_X: ${{ github.event.inputs.max_x }}
+          MIN_Z: ${{ github.event.inputs.min_z }}
+          MAX_Z: ${{ github.event.inputs.max_z }}
         run: |
-          java -jar build/libs/LowYSwampHut.jar \
-            --seed ${{ github.event.inputs.seed }} \
-            --max-y ${{ github.event.inputs.max_y }} \
-            --check-gen ${{ github.event.inputs.check_gen }} \
-            --threads 2 \
+          set -euo pipefail
+          ARGS=(
+            --max-y "$MAX_Y"
+            --threads "$THREADS"
+            --version "$VERSION"
+            --preset "$PRESET"
+            --check-gen "$CHECK_GEN"
             --output result.txt
+          )
+          if [ -n "$SEEDS_FILE" ]; then
+            ARGS+=(--seeds-file "$SEEDS_FILE" --export-seeds hits.txt)
+          else
+            ARGS+=(--seed "$SEED")
+          fi
+          if [ -n "$SQUARE_SIDE" ]; then
+            ARGS+=(--square-side "$SQUARE_SIDE")
+          else
+            [ -n "$MIN_X" ] && ARGS+=(--min-x "$MIN_X")
+            [ -n "$MAX_X" ] && ARGS+=(--max-x "$MAX_X")
+            [ -n "$MIN_Z" ] && ARGS+=(--min-z "$MIN_Z")
+            [ -n "$MAX_Z" ] && ARGS+=(--max-z "$MAX_Z")
+          fi
+          echo "运行: java -jar build/libs/LowYSwampHut.jar ${ARGS[*]}"
+          java -jar build/libs/LowYSwampHut.jar "${ARGS[@]}"
 
       - name: 上传结果
         uses: actions/upload-artifact@v4
         with:
           name: swamp-hut-result
-          path: result.txt
+          path: |
+            result.txt
+            hits.txt
+          if-no-files-found: warn
