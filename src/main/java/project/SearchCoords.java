@@ -123,6 +123,7 @@ public class SearchCoords {
     private List<CPos> phase2Candidates;
     private AtomicInteger phase2Cursor;
     private volatile boolean phase1AdjustPending = false;
+    private volatile boolean phaseAquiferAdjustPending = false;
     private volatile boolean phase2AdjustPending = false;
 
     // ================= 每线程每种子缓存（噪声采样器 + SeedChecker） =================
@@ -241,24 +242,33 @@ public class SearchCoords {
                 return;
             }
 
-            List<CPos> sorted = new ArrayList<>(phase1Candidates.size());
+            List<CPos> afterPhase1 = new ArrayList<>(phase1Candidates.size());
             for (Long key : phase1Candidates) {
-                sorted.add(unpackChunkPos(key));
+                afterPhase1.add(unpackChunkPos(key));
             }
-            sorted.sort(Comparator.comparingLong(pos -> {
+            afterPhase1.sort(Comparator.comparingLong(pos -> {
                 long hx = 16L * pos.getX();
                 long hz = 16L * pos.getZ();
                 return hx * hx + hz * hz;
             }));
-            phase2Candidates = sorted;
-            phase2Cursor = new AtomicInteger(0);
 
             AtomicLong stage2Processed = new AtomicLong(0);
             currentProcessedCount = stage2Processed;
-            beginStage(2, sorted.size());
+            beginStage(2, afterPhase1.size());
+            List<CPos> afterStage2 = runPhaseDensityAquifer(seed, searchThreadCount, maxHeight, afterPhase1, stage2Processed);
+            if (!isRunning) {
+                return;
+            }
 
-            if (!sorted.isEmpty() && isRunning) {
-                runPhase2(seed, searchThreadCount, maxHeight, stage2Processed, resultCallback, checkGeneration);
+            phase2Candidates = afterStage2;
+            phase2Cursor = new AtomicInteger(0);
+
+            AtomicLong stage3Processed = new AtomicLong(0);
+            currentProcessedCount = stage3Processed;
+            beginStage(3, afterStage2.size());
+
+            if (!afterStage2.isEmpty() && isRunning) {
+                runPhase2(seed, searchThreadCount, maxHeight, stage3Processed, resultCallback, checkGeneration);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -305,7 +315,7 @@ public class SearchCoords {
         long processed = currentProcessedCount.get();
         long total = currentTotalTasks;
         int stage = currentStage;
-        double percentage = total > 0 ? (double) processed / total * 100.0 : (stage == 2 ? 100.0 : 0.0);
+        double percentage = total > 0 ? (double) processed / total * 100.0 : (stage >= 3 ? 100.0 : 0.0);
 
         if (isPaused) {
             pauseStartTime.updateAndGet(start -> start == 0 ? System.currentTimeMillis() : start);
@@ -351,6 +361,69 @@ public class SearchCoords {
             }
             runTasksAndWait(tasks, poolSize);
         } while (isRunning && phase1AdjustPending);
+    }
+
+    /**
+     * 阶段2：洞穴梯子 + 5 点密度 + Java 含水层；通过者进入阶段3。
+     */
+    private List<CPos> runPhaseDensityAquifer(long seed, int threadCount, double maxHeight,
+                                             List<CPos> input, AtomicLong processedCount) throws InterruptedException {
+        Set<Long> passedKeys = ConcurrentHashMap.newKeySet();
+        do {
+            phaseAquiferAdjustPending = false;
+            passedKeys.clear();
+            processedCount.set(0);
+            beginStage(2, input.size());
+            if (input.isEmpty()) {
+                break;
+            }
+            AtomicInteger cursor = new AtomicInteger(0);
+            int requested = currentThreadCount > 0 ? currentThreadCount : threadCount;
+            int poolSize = Math.min(requested, Math.max(1, input.size()));
+            int phase1Height = phase1CheckHeight((int) maxHeight);
+            List<Runnable> tasks = new ArrayList<>(poolSize);
+            for (int i = 0; i < poolSize; i++) {
+                tasks.add(() -> {
+                    metricsHook.regionWorkerStarted();
+                    try {
+                        while (isRunning) {
+                            waitIfPaused();
+                            int idx = cursor.getAndIncrement();
+                            if (idx >= input.size()) {
+                                break;
+                            }
+                            try {
+                                CPos pos = input.get(idx);
+                                int hutX = pos.getX() * 16;
+                                int hutZ = pos.getZ() * 16;
+                                if (!passesDensityAndLadders(seed, hutX, hutZ, phase1Height)) {
+                                    continue;
+                                }
+                                if (passesAquifer(seed, hutX, hutZ, phase1Height)) {
+                                    passedKeys.add(packChunkPos(pos.getX(), pos.getZ()));
+                                }
+                            } finally {
+                                processedCount.incrementAndGet();
+                            }
+                        }
+                    } finally {
+                        metricsHook.regionWorkerStopped();
+                    }
+                });
+            }
+            runTasksAndWait(tasks, poolSize);
+        } while (isRunning && phaseAquiferAdjustPending);
+
+        List<CPos> out = new ArrayList<>(passedKeys.size());
+        for (Long key : passedKeys) {
+            out.add(unpackChunkPos(key));
+        }
+        out.sort(Comparator.comparingLong(pos -> {
+            long hx = 16L * pos.getX();
+            long hz = 16L * pos.getZ();
+            return hx * hx + hz * hz;
+        }));
+        return out;
     }
 
     private void runPhase2(long seed, int threadCount, double maxHeight, AtomicLong processedCount,
@@ -484,6 +557,8 @@ public class SearchCoords {
 
         if (currentStage == 1) {
             phase1AdjustPending = true;
+        } else if (currentStage == 2) {
+            phaseAquiferAdjustPending = true;
         } else {
             phase2AdjustPending = true;
         }
@@ -558,7 +633,7 @@ public class SearchCoords {
         }
     }
 
-    /** 阶段1：噪声/群系粗筛 + density 预筛，仅暂存候选坐标 */
+    /** 阶段1：结构定位 + 四气候参数（含 Cont），仅暂存候选；梯子/密度放到阶段2 */
     class Phase1RegionChecker implements Runnable {
         private final long seed;
         private final int startX;
@@ -584,8 +659,6 @@ public class SearchCoords {
         public void run() {
             metricsHook.regionWorkerStarted();
             try {
-                // -54 在阶段1 / 密度预筛按 -50；阶段2仍用真实 maxHeight
-                int phase1Height = phase1CheckHeight((int) maxHeight);
                 // 阶段1不清理 ThreadLocal，供同线程池进入阶段2时复用噪声缓存
                 for (int x = startX; x < endX && isRunning; x++) {
                     for (int z = minZ; z < maxZ && isRunning; z++) {
@@ -594,15 +667,25 @@ public class SearchCoords {
                             break;
                         }
                         try {
-                            CPos pos = swampHut.getInRegion(seed, x, z, rand);
-                            int hutX = 16 * pos.getX();
-                            int hutZ = 16 * pos.getZ();
-                            if (!SearchCoords.this.check(seed, hutX, hutZ, phase1Height)) {
-                                continue;
-                            }
-                            // 用 slopedCheese / 多点梯子预估地表，砍掉明显过高的候选，减少阶段2 SeedChecker 调用
-                            if (!passesDensityPrefilter(seed, hutX, hutZ, phase1Height, mcVersion, worldPresetMode)) {
-                                continue;
+                            int hutX;
+                            int hutZ;
+                            CPos pos;
+                            if (CubiomesBridge.isAvailable()) {
+                                int[] hut = CubiomesBridge.climateRegion(seed, x, z,
+                                        gameVersion, worldPresetMode);
+                                if (hut == null) {
+                                    continue;
+                                }
+                                hutX = hut[0];
+                                hutZ = hut[1];
+                                pos = new CPos(hutX >> 4, hutZ >> 4);
+                            } else {
+                                pos = swampHut.getInRegion(seed, x, z, rand);
+                                hutX = 16 * pos.getX();
+                                hutZ = 16 * pos.getZ();
+                                if (!SearchCoords.this.checkClimateOnly(seed, hutX, hutZ)) {
+                                    continue;
+                                }
                             }
                             phase1Candidates.add(packChunkPos(pos.getX(), pos.getZ()));
                         } finally {
@@ -834,66 +917,89 @@ public class SearchCoords {
         return Math.ceil((totalHeight + remaining * (double) COLUMN_SCAN_MIN_Y) / HUT_FOOTPRINT_COLUMNS + 1.0);
     }
 
-    public boolean check(long seed, int x, int z, int maxHeight) {
+    /** 阶段1：仅四气候参数（侵蚀/温度/怪异度/大陆性）。 */
+    public boolean checkClimateOnly(long seed, int x, int z) {
+        if (worldPresetMode == WorldPresetMode.SINGLE_BIOME) {
+            return true;
+        }
         WorldNoiseCache cache = getThreadResources(seed, worldPresetMode, metricsHook).noise;
         int climateX = x + 8;
         int climateZ = z + 8;
-        int heightX = x + 3;
-        int heightZ = z + 3;
-
-        boolean isSingleBiome = worldPresetMode == WorldPresetMode.SINGLE_BIOME;
-        if (!isSingleBiome) { // 检查群系
-            double erosionSample = cache.erosion.sample((double) climateX / 4, 0, (double) climateZ / 4);
-            if (erosionSample < 0.55) {
+        double erosionSample = cache.erosion.sample((double) climateX / 4, 0, (double) climateZ / 4);
+        if (erosionSample < 0.55) {
+            return false;
+        }
+        double temperature = cache.temperature.sample((double) climateX / 4, 0, (double) climateZ / 4);
+        if (mcVersion == MCVersion.v1_18_2) {
+            if (temperature < -0.45) {
                 return false;
             }
-            double temperature = cache.temperature.sample((double) climateX / 4, 0, (double) climateZ / 4);
-            // 1.18.2版本只检查温度不能小于-0.45，其他版本检查温度不能小于-0.45且不能大于0.2
-            if (mcVersion == MCVersion.v1_18_2) {
-                if (temperature < -0.45) {
-                    return false;
-                }
-            } else {
-                if (temperature > 0.2 || temperature < -0.45) {
-                    return false;
-                }
-            }
-            double ridge = cache.ridge.sample((double) climateX / 4, 0, (double) climateZ / 4);
-            if ((ridge > 0.42 && ridge < 0.91) || (ridge < -0.42 && ridge > -0.91)) {
-                return false;
-            }
-            if (gameVersion == GameVersion.V26_2 && ridge <= -0.91) {
+        } else {
+            if (temperature > 0.2 || temperature < -0.45) {
                 return false;
             }
         }
+        double ridge = cache.ridge.sample((double) climateX / 4, 0, (double) climateZ / 4);
+        if ((ridge > 0.42 && ridge < 0.91) || (ridge < -0.42 && ridge > -0.91)) {
+            return false;
+        }
+        if (gameVersion == GameVersion.V26_2 && ridge <= -0.91) {
+            return false;
+        }
+        return cache.continentalness.sample((double) climateX / 4, 0, (double) climateZ / 4) >= -0.11;
+    }
+
+    /** 阶段2 前半：洞穴梯子粗筛（不含密度与含水层）。 */
+    public boolean checkCaveLadders(long seed, int x, int z, int maxHeight) {
+        int heightX = x + 3;
+        int heightZ = z + 3;
         if (Entrance(seed, heightX, 50, heightZ, worldPresetMode) >= 0) {
             return false;
         }
         if (Entrance(seed, heightX, 60, heightZ, worldPresetMode) >= 0) {
             return false;
         }
-        // 检查maxHeight本身（调用方应对 -54 传入 phase1CheckHeight=-50）
-        if (Entrance2(seed, heightX, maxHeight, heightZ, worldPresetMode) >= 0 && Cheese(seed, heightX, maxHeight, heightZ, worldPresetMode) >= 0) {
+        if (Entrance2(seed, heightX, maxHeight, heightZ, worldPresetMode) >= 0
+                && Cheese(seed, heightX, maxHeight, heightZ, worldPresetMode) >= 0) {
             return false;
         }
-        // 0以下使用Entrance2；选 -50/-54 时梯子下限为 -50，其余仍为 -40
         int ladderFloor = Math.max(PHASE1_MIN_CHECK_HEIGHT, Math.min(-40, maxHeight));
         for (int y = 0; y >= ladderFloor; y -= 10) {
             if (maxHeight < y) {
-                if (Entrance2(seed, heightX, y, heightZ, worldPresetMode) >= 0 && Cheese(seed, heightX, y, heightZ, worldPresetMode) >= 0) {
+                if (Entrance2(seed, heightX, y, heightZ, worldPresetMode) >= 0
+                        && Cheese(seed, heightX, y, heightZ, worldPresetMode) >= 0) {
                     return false;
                 }
             }
         }
-        // 10-40使用Entrance（较复杂）
         for (int y = 10; y <= 40; y += 10) {
-            if (Entrance(seed, heightX, y, heightZ, worldPresetMode) >= 0 && Cheese(seed, heightX, y, heightZ, worldPresetMode) >= 0) {
+            if (Entrance(seed, heightX, y, heightZ, worldPresetMode) >= 0
+                    && Cheese(seed, heightX, y, heightZ, worldPresetMode) >= 0) {
                 return false;
             }
         }
-        if (!isSingleBiome && cache.continentalness.sample((double) climateX / 4, 0, (double) climateZ / 4) < -0.11) { // 检查大陆性
-            return false;
+        return true;
+    }
+
+    /** 气候 + 梯子（兼容旧测试 / 回退路径）。含水层与密度仍分开。 */
+    public boolean check(long seed, int x, int z, int maxHeight) {
+        return checkClimateOnly(seed, x, z) && checkCaveLadders(seed, x, z, maxHeight);
+    }
+
+    /** 阶段2：JNI 密度+梯子，或 Java 梯子+5点密度。 */
+    boolean passesDensityAndLadders(long seed, int hutX, int hutZ, int maxHeight) {
+        if (CubiomesBridge.isAvailable()) {
+            return CubiomesBridge.densityFilter(seed, hutX, hutZ, maxHeight, gameVersion, worldPresetMode);
         }
+        return checkCaveLadders(seed, hutX, hutZ, maxHeight)
+                && passesDensityPrefilter(seed, hutX, hutZ, maxHeight, mcVersion, worldPresetMode);
+    }
+
+    /** 含水层洪水噪声：仅 Java。 */
+    boolean passesAquifer(long seed, int x, int z, int maxHeight) {
+        WorldNoiseCache cache = getThreadResources(seed, worldPresetMode, metricsHook).noise;
+        int heightX = x + 3;
+        int heightZ = z + 3;
         for (int y = maxHeight; y <= 60; y += 10) {
             if (cache.aquiferFloodedness.sample(heightX, y * 0.67, heightZ) > 0.41) {
                 return false;

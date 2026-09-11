@@ -6,6 +6,27 @@ benchmark-results/
 !**/src/test/**/build/
 .kotlin
 
+# Local cubiomes override (preferred by jni/build-jni.bat when present)
+/cubiomes/
+
+# Native build outputs (rebuild via jni/build-jni.bat)
+native/windows/*.dll
+native/linux/*.so
+native/macos/*.dylib
+jni/native/jni/build/
+jni/*.o
+jni/*.obj
+jni/bridge.o
+jni/generator.o
+jni/layers.o
+jni/biomenoise.o
+jni/biomes.o
+jni/noise.o
+jni/util.o
+jni/terrainnoise.o
+jni/SwampHutPhase1.o
+jni/finders.o
+
 ### IntelliJ IDEA ###
 /.idea/
 .idea/modules.xml

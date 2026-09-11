@@ -57,9 +57,11 @@ public final class BenchmarkRunner {
             metrics.start();
             search.startSearch(profile.seed(), profile.threads(), 0, profile.width(), 0, profile.height(),
                     profile.maxHeight(), info -> {
-                        long completed = info.stage() == 1
-                                ? info.processed()
-                                : profile.iterations() + info.processed();
+                        long completed = switch (info.stage()) {
+                            case 1 -> info.processed();
+                            case 2 -> profile.iterations() + info.processed();
+                            default -> profile.iterations() * 2L + info.processed();
+                        };
                         iterations.accumulateAndGet(completed, Math::max);
                     }, null, true);
             while (search.isRunning()) {

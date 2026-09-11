@@ -1588,7 +1588,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
 
             int progress = (int) Math.min(100, info.percentage());
             searchProgressBar.setValue(progress);
-            String progressKey = info.stage() == 1 ? "progress.stage1" : "progress.stage2";
+            String progressKey = switch (info.stage()) {
+                case 1 -> "progress.stage1";
+                case 2 -> "progress.stage2";
+                default -> "progress.stage3";
+            };
             searchProgressBar.setString(getString(progressKey, info.processed(), info.total(), info.percentage()));
 
             // 暂停时不更新时间
@@ -1603,8 +1607,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                 searchRemainingTimeLabel.setText(getString("remainingTime.paused"));
             }
 
-            // 仅阶段2完成时结束搜索（阶段1达到100%不解锁 UI）
-            if (info.stage() == 2 && info.processed() >= info.total()) {
+            // 仅阶段3完成时结束搜索
+            if (info.stage() == 3 && info.processed() >= info.total()) {
                 isSearchRunning = false;
                 isSearchPaused = false;
                 searchStartButton.setEnabled(true);
@@ -2731,8 +2735,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
                                     final long finalDisplayProcessed = displayProcessed;
                                     final long finalTotal = total;
                                     final double finalDisplayPercentage = displayPercentage;
-                                    final String seedProgressKey = info.stage() == 1
-                                            ? "currentSeed.stage1" : "currentSeed.stage2";
+                                    final String seedProgressKey = switch (info.stage()) {
+                                        case 1 -> "currentSeed.stage1";
+                                        case 2 -> "currentSeed.stage2";
+                                        default -> "currentSeed.stage3";
+                                    };
                                     SwingUtilities.invokeLater(() -> {
                                         if (isListSearchRunning) {
                                             listSearchCurrentSeedProgressLabel.setText(
