@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Parity checks between cubiomes JNI and Java seedfinding / SearchCoords heuristics.
+ * Parity checks between cubiomes JNI (structure + climate3) and Java.
  */
 public class CubiomesParityTest {
 
@@ -42,7 +42,7 @@ public class CubiomesParityTest {
     }
 
     @Test
-    void climateRegionAgreesWithJavaClimate() {
+    void climateRegionAgreesWithJavaClimate3() {
         SearchCoords searcher = new SearchCoords(GameVersion.V1_21_TO_26_1, WorldPresetMode.NORMAL);
         long seed = 1L;
         SwampHut hut = new SwampHut(GameVersion.V1_21_TO_26_1.getMcVersion());
@@ -54,7 +54,7 @@ public class CubiomesParityTest {
                 CPos pos = hut.getInRegion(seed, rx, rz, rand);
                 int hutX = pos.getX() * 16;
                 int hutZ = pos.getZ() * 16;
-                boolean javaPass = searcher.checkClimateOnly(seed, hutX, hutZ);
+                boolean javaPass = searcher.checkClimate3(seed, hutX, hutZ);
                 int[] climate = CubiomesBridge.climateRegion(seed, rx, rz,
                         GameVersion.V1_21_TO_26_1, WorldPresetMode.NORMAL);
                 boolean jniPass = climate != null;
@@ -70,63 +70,26 @@ public class CubiomesParityTest {
         }
         assertTrue(checked > 0);
         double rate = agreements / (double) checked;
-        assertTrue(rate >= 0.8, "climate agreement rate=" + rate + " (" + agreements + "/" + checked + ")");
+        assertTrue(rate >= 0.8, "climate3 agreement rate=" + rate + " (" + agreements + "/" + checked + ")");
     }
 
     @Test
-    void densityFilterAgreesWithJavaLaddersAndDensity() {
-        SearchCoords searcher = new SearchCoords(GameVersion.V1_21_TO_26_1, WorldPresetMode.NORMAL);
-        long seed = 1L;
-        int checked = 0;
-        int agreements = 0;
-        for (int rx = -8; rx <= 8 && checked < 40; rx++) {
-            for (int rz = -8; rz <= 8 && checked < 40; rz++) {
-                int[] climate = CubiomesBridge.climateRegion(seed, rx, rz,
-                        GameVersion.V1_21_TO_26_1, WorldPresetMode.NORMAL);
-                if (climate == null) {
-                    continue;
-                }
-                int hutX = climate[0];
-                int hutZ = climate[1];
-                int phase1Height = -50;
-                boolean javaPass = searcher.checkCaveLadders(seed, hutX, hutZ, phase1Height)
-                        && SearchCoords.passesDensityPrefilter(
-                        seed, hutX, hutZ, phase1Height,
-                        GameVersion.V1_21_TO_26_1.getMcVersion(), WorldPresetMode.NORMAL);
-                boolean jniPass = CubiomesBridge.densityFilter(seed, hutX, hutZ, phase1Height,
-                        GameVersion.V1_21_TO_26_1, WorldPresetMode.NORMAL);
-                if (jniPass == javaPass) {
-                    agreements++;
-                }
-                checked++;
-            }
-        }
-        assertTrue(checked > 0, "need climate survivors for density parity");
-        double rate = agreements / (double) checked;
-        assertTrue(rate >= 0.8, "density agreement rate=" + rate + " (" + agreements + "/" + checked + ")");
-    }
-
-    @Test
-    void phase1RegionMatchesClimateThenDensity() {
+    void climateFilterMatchesClimateRegion() {
         long seed = 12345L;
         for (int rx = -1; rx <= 1; rx++) {
             for (int rz = -1; rz <= 1; rz++) {
-                int[] combined = CubiomesBridge.phase1Region(seed, rx, rz, -50,
+                int[] region = CubiomesBridge.climateRegion(seed, rx, rz,
                         GameVersion.V1_21_TO_26_1, WorldPresetMode.NORMAL);
-                int[] climate = CubiomesBridge.climateRegion(seed, rx, rz,
+                int[] hut = CubiomesBridge.getHutInRegion(seed, rx, rz, GameVersion.V1_21_TO_26_1);
+                assertNotNull(hut);
+                boolean filter = CubiomesBridge.climateFilter(seed, hut[0], hut[1],
                         GameVersion.V1_21_TO_26_1, WorldPresetMode.NORMAL);
-                if (climate == null) {
-                    org.junit.jupiter.api.Assertions.assertNull(combined);
-                    continue;
-                }
-                boolean density = CubiomesBridge.densityFilter(seed, climate[0], climate[1], -50,
-                        GameVersion.V1_21_TO_26_1, WorldPresetMode.NORMAL);
-                if (density) {
-                    assertNotNull(combined);
-                    assertEquals(climate[0], combined[0]);
-                    assertEquals(climate[1], combined[1]);
+                if (filter) {
+                    assertNotNull(region);
+                    assertEquals(hut[0], region[0]);
+                    assertEquals(hut[1], region[1]);
                 } else {
-                    org.junit.jupiter.api.Assertions.assertNull(combined);
+                    org.junit.jupiter.api.Assertions.assertNull(region);
                 }
             }
         }
@@ -163,7 +126,7 @@ public class CubiomesParityTest {
         for (int i = 0; i < n; i++) {
             CubiomesBridge.climateRegion(seed, regions[i][0], regions[i][1],
                     GameVersion.V1_21_TO_26_1, WorldPresetMode.NORMAL);
-            searcher.checkClimateOnly(seed, huts[i][0], huts[i][1]);
+            searcher.checkClimate3(seed, huts[i][0], huts[i][1]);
         }
         long t0 = System.nanoTime();
         for (int rep = 0; rep < 40; rep++) {
@@ -176,7 +139,7 @@ public class CubiomesParityTest {
         t0 = System.nanoTime();
         for (int rep = 0; rep < 40; rep++) {
             for (int i = 0; i < n; i++) {
-                searcher.checkClimateOnly(seed, huts[i][0], huts[i][1]);
+                searcher.checkClimate3(seed, huts[i][0], huts[i][1]);
             }
         }
         long javaNs = System.nanoTime() - t0;

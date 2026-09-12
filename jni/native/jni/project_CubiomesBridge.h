@@ -8,17 +8,11 @@ extern "C" {
 JNIEXPORT jintArray JNICALL Java_project_CubiomesBridge_nativeGetHutInRegion
   (JNIEnv *, jclass, jlong, jint, jint, jint);
 
-JNIEXPORT jboolean JNICALL Java_project_CubiomesBridge_nativePhase1Filter
-  (JNIEnv *, jclass, jlong, jint, jint, jint, jint, jint);
-
-JNIEXPORT jintArray JNICALL Java_project_CubiomesBridge_nativePhase1Region
-  (JNIEnv *, jclass, jlong, jint, jint, jint, jint, jint);
-
 JNIEXPORT jintArray JNICALL Java_project_CubiomesBridge_nativeClimateRegion
   (JNIEnv *, jclass, jlong, jint, jint, jint, jint);
 
-JNIEXPORT jboolean JNICALL Java_project_CubiomesBridge_nativeDensityFilter
-  (JNIEnv *, jclass, jlong, jint, jint, jint, jint, jint);
+JNIEXPORT jboolean JNICALL Java_project_CubiomesBridge_nativeClimateFilter
+  (JNIEnv *, jclass, jlong, jint, jint, jint, jint);
 
 #ifdef __cplusplus
 }

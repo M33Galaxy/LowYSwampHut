@@ -23,29 +23,19 @@ enum {
     WP_SINGLE_BIOME = 2
 };
 
+/** Structure position only. */
 int swampHutPosInRegion(uint64_t seed, int regX, int regZ, int gameVersion, int *outX, int *outZ);
 
 /**
- * Stage 1: structure pos + climate 4-params (+ Cont early-out). No cave/density.
- * On success writes hut block coords and returns 1.
+ * Structure pos + erosion / temperature / weirdness only.
+ * Cont, cave ladders, 5-probe density, aquifer stay in Java.
  */
 int swampHutClimateRegion(uint64_t seed, int regX, int regZ,
                           int gameVersion, int worldPreset, int *outX, int *outZ);
 
-/**
- * Stage 2 (native half): cave ladders + 5-point density for a known hut.
- * Returns 1 if passed. Caller runs Java aquifer after this.
- */
-int swampHutDensityFilter(uint64_t seed, int hutX, int hutZ, int maxHeight,
+/** Climate-3 checks for a known hut (no structure lookup). */
+int swampHutClimateFilter(uint64_t seed, int hutX, int hutZ,
                           int gameVersion, int worldPreset);
-
-/** Legacy: climate + ladders + density (no aquifer). Prefer split APIs above. */
-int swampHutPhase1Filter(uint64_t seed, int hutX, int hutZ, int maxHeight,
-                         int gameVersion, int worldPreset);
-
-/** Legacy combined region call. Prefer climateRegion + densityFilter. */
-int swampHutPhase1Region(uint64_t seed, int regX, int regZ, int maxHeight,
-                         int gameVersion, int worldPreset, int *outX, int *outZ);
 
 #ifdef __cplusplus
 }

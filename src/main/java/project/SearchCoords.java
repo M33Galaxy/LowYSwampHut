@@ -123,7 +123,7 @@ public class SearchCoords {
     private List<CPos> phase2Candidates;
     private AtomicInteger phase2Cursor;
     private volatile boolean phase1AdjustPending = false;
-    private volatile boolean phaseAquiferAdjustPending = false;
+    private volatile boolean phaseJavaAdjustPending = false;
     private volatile boolean phase2AdjustPending = false;
 
     // ================= 每线程每种子缓存（噪声采样器 + SeedChecker） =================
@@ -237,16 +237,17 @@ public class SearchCoords {
                                 double maxHeight, AtomicLong processedCount, Consumer<String> resultCallback,
                                 boolean checkGeneration, CountDownLatch doneLatch) {
         try {
+            // 阶段1：仅结构 + 气候三参数（JNI 或 Java），不碰梯子/密度/含水层
             runPhase1(seed, searchThreadCount, minX, maxX, minZ, maxZ, maxHeight, processedCount);
             if (!isRunning) {
                 return;
             }
 
-            List<CPos> afterPhase1 = new ArrayList<>(phase1Candidates.size());
+            List<CPos> afterClimate = new ArrayList<>(phase1Candidates.size());
             for (Long key : phase1Candidates) {
-                afterPhase1.add(unpackChunkPos(key));
+                afterClimate.add(unpackChunkPos(key));
             }
-            afterPhase1.sort(Comparator.comparingLong(pos -> {
+            afterClimate.sort(Comparator.comparingLong(pos -> {
                 long hx = 16L * pos.getX();
                 long hz = 16L * pos.getZ();
                 return hx * hx + hz * hz;
@@ -254,20 +255,20 @@ public class SearchCoords {
 
             AtomicLong stage2Processed = new AtomicLong(0);
             currentProcessedCount = stage2Processed;
-            beginStage(2, afterPhase1.size());
-            List<CPos> afterStage2 = runPhaseDensityAquifer(seed, searchThreadCount, maxHeight, afterPhase1, stage2Processed);
+            beginStage(2, afterClimate.size());
+            List<CPos> afterJava = runPhaseJavaFilter(seed, searchThreadCount, maxHeight, afterClimate, stage2Processed);
             if (!isRunning) {
                 return;
             }
 
-            phase2Candidates = afterStage2;
+            phase2Candidates = afterJava;
             phase2Cursor = new AtomicInteger(0);
 
             AtomicLong stage3Processed = new AtomicLong(0);
             currentProcessedCount = stage3Processed;
-            beginStage(3, afterStage2.size());
+            beginStage(3, afterJava.size());
 
-            if (!afterStage2.isEmpty() && isRunning) {
+            if (!afterJava.isEmpty() && isRunning) {
                 runPhase2(seed, searchThreadCount, maxHeight, stage3Processed, resultCallback, checkGeneration);
             }
         } catch (InterruptedException e) {
@@ -364,13 +365,13 @@ public class SearchCoords {
     }
 
     /**
-     * 阶段2：洞穴梯子 + 5 点密度 + Java 含水层；通过者进入阶段3。
+     * 阶段2：对气候幸存者做 Java 梯子 + Cont + 含水层 + 5 点密度。
      */
-    private List<CPos> runPhaseDensityAquifer(long seed, int threadCount, double maxHeight,
-                                             List<CPos> input, AtomicLong processedCount) throws InterruptedException {
+    private List<CPos> runPhaseJavaFilter(long seed, int threadCount, double maxHeight,
+                                          List<CPos> input, AtomicLong processedCount) throws InterruptedException {
         Set<Long> passedKeys = ConcurrentHashMap.newKeySet();
         do {
-            phaseAquiferAdjustPending = false;
+            phaseJavaAdjustPending = false;
             passedKeys.clear();
             processedCount.set(0);
             beginStage(2, input.size());
@@ -396,12 +397,13 @@ public class SearchCoords {
                                 CPos pos = input.get(idx);
                                 int hutX = pos.getX() * 16;
                                 int hutZ = pos.getZ() * 16;
-                                if (!passesDensityAndLadders(seed, hutX, hutZ, phase1Height)) {
+                                if (!checkPostClimate(seed, hutX, hutZ, phase1Height)) {
                                     continue;
                                 }
-                                if (passesAquifer(seed, hutX, hutZ, phase1Height)) {
-                                    passedKeys.add(packChunkPos(pos.getX(), pos.getZ()));
+                                if (!passesDensityPrefilter(seed, hutX, hutZ, phase1Height, mcVersion, worldPresetMode)) {
+                                    continue;
                                 }
+                                passedKeys.add(packChunkPos(pos.getX(), pos.getZ()));
                             } finally {
                                 processedCount.incrementAndGet();
                             }
@@ -412,7 +414,7 @@ public class SearchCoords {
                 });
             }
             runTasksAndWait(tasks, poolSize);
-        } while (isRunning && phaseAquiferAdjustPending);
+        } while (isRunning && phaseJavaAdjustPending);
 
         List<CPos> out = new ArrayList<>(passedKeys.size());
         for (Long key : passedKeys) {
@@ -558,7 +560,7 @@ public class SearchCoords {
         if (currentStage == 1) {
             phase1AdjustPending = true;
         } else if (currentStage == 2) {
-            phaseAquiferAdjustPending = true;
+            phaseJavaAdjustPending = true;
         } else {
             phase2AdjustPending = true;
         }
@@ -633,14 +635,13 @@ public class SearchCoords {
         }
     }
 
-    /** 阶段1：结构定位 + 四气候参数（含 Cont），仅暂存候选；梯子/密度放到阶段2 */
+    /** 阶段1：仅结构定位 + 气候三参数（JNI 优先）；梯子/Cont/含水层/密度放到阶段2 */
     class Phase1RegionChecker implements Runnable {
         private final long seed;
         private final int startX;
         private final int endX;
         private final int minZ;
         private final int maxZ;
-        private final double maxHeight;
         private final ChunkRand rand;
         private final AtomicLong processedCount;
 
@@ -650,7 +651,6 @@ public class SearchCoords {
             this.endX = endX;
             this.minZ = minZ;
             this.maxZ = maxZ;
-            this.maxHeight = maxHeight;
             this.rand = new ChunkRand();
             this.processedCount = processedCount;
         }
@@ -659,7 +659,6 @@ public class SearchCoords {
         public void run() {
             metricsHook.regionWorkerStarted();
             try {
-                // 阶段1不清理 ThreadLocal，供同线程池进入阶段2时复用噪声缓存
                 for (int x = startX; x < endX && isRunning; x++) {
                     for (int z = minZ; z < maxZ && isRunning; z++) {
                         waitIfPaused();
@@ -683,7 +682,7 @@ public class SearchCoords {
                                 pos = swampHut.getInRegion(seed, x, z, rand);
                                 hutX = 16 * pos.getX();
                                 hutZ = 16 * pos.getZ();
-                                if (!SearchCoords.this.checkClimateOnly(seed, hutX, hutZ)) {
+                                if (!SearchCoords.this.checkClimate3(seed, hutX, hutZ)) {
                                     continue;
                                 }
                             }
@@ -917,8 +916,8 @@ public class SearchCoords {
         return Math.ceil((totalHeight + remaining * (double) COLUMN_SCAN_MIN_Y) / HUT_FOOTPRINT_COLUMNS + 1.0);
     }
 
-    /** 阶段1：仅四气候参数（侵蚀/温度/怪异度/大陆性）。 */
-    public boolean checkClimateOnly(long seed, int x, int z) {
+    /** 气候三参数（侵蚀/温度/怪异度），不含 Cont。 */
+    public boolean checkClimate3(long seed, int x, int z) {
         if (worldPresetMode == WorldPresetMode.SINGLE_BIOME) {
             return true;
         }
@@ -943,16 +942,21 @@ public class SearchCoords {
         if ((ridge > 0.42 && ridge < 0.91) || (ridge < -0.42 && ridge > -0.91)) {
             return false;
         }
-        if (gameVersion == GameVersion.V26_2 && ridge <= -0.91) {
-            return false;
-        }
-        return cache.continentalness.sample((double) climateX / 4, 0, (double) climateZ / 4) >= -0.11;
+        return !(gameVersion == GameVersion.V26_2 && ridge <= -0.91);
     }
 
-    /** 阶段2 前半：洞穴梯子粗筛（不含密度与含水层）。 */
-    public boolean checkCaveLadders(long seed, int x, int z, int maxHeight) {
+    /**
+     * 气候三参数之后的原阶段1剩余逻辑：洞穴梯子 + 大陆性 + 含水层。
+     * 5 点密度仍在 check 之外单独调用。
+     */
+    public boolean checkPostClimate(long seed, int x, int z, int maxHeight) {
+        WorldNoiseCache cache = getThreadResources(seed, worldPresetMode, metricsHook).noise;
+        int climateX = x + 8;
+        int climateZ = z + 8;
         int heightX = x + 3;
         int heightZ = z + 3;
+        boolean isSingleBiome = worldPresetMode == WorldPresetMode.SINGLE_BIOME;
+
         if (Entrance(seed, heightX, 50, heightZ, worldPresetMode) >= 0) {
             return false;
         }
@@ -978,34 +982,20 @@ public class SearchCoords {
                 return false;
             }
         }
-        return true;
-    }
-
-    /** 气候 + 梯子（兼容旧测试 / 回退路径）。含水层与密度仍分开。 */
-    public boolean check(long seed, int x, int z, int maxHeight) {
-        return checkClimateOnly(seed, x, z) && checkCaveLadders(seed, x, z, maxHeight);
-    }
-
-    /** 阶段2：JNI 密度+梯子，或 Java 梯子+5点密度。 */
-    boolean passesDensityAndLadders(long seed, int hutX, int hutZ, int maxHeight) {
-        if (CubiomesBridge.isAvailable()) {
-            return CubiomesBridge.densityFilter(seed, hutX, hutZ, maxHeight, gameVersion, worldPresetMode);
+        if (!isSingleBiome && cache.continentalness.sample((double) climateX / 4, 0, (double) climateZ / 4) < -0.11) {
+            return false;
         }
-        return checkCaveLadders(seed, hutX, hutZ, maxHeight)
-                && passesDensityPrefilter(seed, hutX, hutZ, maxHeight, mcVersion, worldPresetMode);
-    }
-
-    /** 含水层洪水噪声：仅 Java。 */
-    boolean passesAquifer(long seed, int x, int z, int maxHeight) {
-        WorldNoiseCache cache = getThreadResources(seed, worldPresetMode, metricsHook).noise;
-        int heightX = x + 3;
-        int heightZ = z + 3;
         for (int y = maxHeight; y <= 60; y += 10) {
             if (cache.aquiferFloodedness.sample(heightX, y * 0.67, heightZ) > 0.41) {
                 return false;
             }
         }
         return true;
+    }
+
+    /** 完整阶段1粗筛（不含 5 点密度）：气候三参数 + 梯子 + Cont + 含水层。 */
+    public boolean check(long seed, int x, int z, int maxHeight) {
+        return checkClimate3(seed, x, z) && checkPostClimate(seed, x, z, maxHeight);
     }
 
     private static ThreadSeedResources getThreadResources(long seed, WorldPresetMode worldPresetMode) {

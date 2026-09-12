@@ -11,7 +11,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * JNI bridge to cubiomes-backed phase-1 swamp hut filter.
+ * JNI bridge to cubiomes: structure position + climate three-params only.
+ * Cont / cave ladders / 5-probe density / aquifer remain in Java.
  */
 public final class CubiomesBridge {
 
@@ -156,28 +157,8 @@ public final class CubiomesBridge {
     }
 
     /**
-     * Climate + Cont + cave ladders + 5-point density (compat helper; aquifer stays in Java).
-     */
-    public static boolean phase1Filter(long seed, int hutX, int hutZ, int maxHeight,
-                                       GameVersion gameVersion, WorldPresetMode worldPreset) {
-        ensureAvailable();
-        return nativePhase1Filter(seed, hutX, hutZ, maxHeight,
-                gameVersionOrdinal(gameVersion), worldPresetOrdinal(worldPreset));
-    }
-
-    /**
-     * Compat: structure + climate + ladders + density in one call.
-     * Prefer climateRegion + densityFilter for the staged pipeline.
-     */
-    public static int[] phase1Region(long seed, int regX, int regZ, int maxHeight,
-                                     GameVersion gameVersion, WorldPresetMode worldPreset) {
-        ensureAvailable();
-        return nativePhase1Region(seed, regX, regZ, maxHeight,
-                gameVersionOrdinal(gameVersion), worldPresetOrdinal(worldPreset));
-    }
-
-    /**
-     * Stage 1: structure + climate only. Returns hut [x,z] or null.
+     * Structure + erosion/temp/weirdness. Cont / ladders / density / aquifer stay in Java.
+     * @return hut block [x,z] if passed, else null
      */
     public static int[] climateRegion(long seed, int regX, int regZ,
                                       GameVersion gameVersion, WorldPresetMode worldPreset) {
@@ -186,13 +167,11 @@ public final class CubiomesBridge {
                 gameVersionOrdinal(gameVersion), worldPresetOrdinal(worldPreset));
     }
 
-    /**
-     * Stage 2 (native): cave ladders + 5-point density. Aquifer stays in Java after this.
-     */
-    public static boolean densityFilter(long seed, int hutX, int hutZ, int maxHeight,
+    /** Climate-3 checks for a known hut position. */
+    public static boolean climateFilter(long seed, int hutX, int hutZ,
                                         GameVersion gameVersion, WorldPresetMode worldPreset) {
         ensureAvailable();
-        return nativeDensityFilter(seed, hutX, hutZ, maxHeight,
+        return nativeClimateFilter(seed, hutX, hutZ,
                 gameVersionOrdinal(gameVersion), worldPresetOrdinal(worldPreset));
     }
 
@@ -205,15 +184,9 @@ public final class CubiomesBridge {
 
     private static native int[] nativeGetHutInRegion(long seed, int regX, int regZ, int gameVersion);
 
-    private static native boolean nativePhase1Filter(long seed, int hutX, int hutZ, int maxHeight,
-                                                     int gameVersion, int worldPreset);
-
-    private static native int[] nativePhase1Region(long seed, int regX, int regZ, int maxHeight,
-                                                   int gameVersion, int worldPreset);
-
     private static native int[] nativeClimateRegion(long seed, int regX, int regZ,
                                                     int gameVersion, int worldPreset);
 
-    private static native boolean nativeDensityFilter(long seed, int hutX, int hutZ, int maxHeight,
+    private static native boolean nativeClimateFilter(long seed, int hutX, int hutZ,
                                                       int gameVersion, int worldPreset);
 }
