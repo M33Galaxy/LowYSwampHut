@@ -123,6 +123,7 @@ public class SearchCoords {
     private List<CPos> phase2Candidates;
     private AtomicInteger phase2Cursor;
     private volatile boolean phase1AdjustPending = false;
+    private volatile boolean phaseBiomeAdjustPending = false;
     private volatile boolean phase2AdjustPending = false;
 
     // ================= 每线程每种子缓存（噪声采样器 + SeedChecker） =================
@@ -236,29 +237,40 @@ public class SearchCoords {
                                 double maxHeight, AtomicLong processedCount, Consumer<String> resultCallback,
                                 boolean checkGeneration, CountDownLatch doneLatch) {
         try {
+            // 阶段1：纯 Java 粗筛（不调用 JNI，避免上一分支阶段1热路径卡死）
             runPhase1(seed, searchThreadCount, minX, maxX, minZ, maxZ, maxHeight, processedCount);
             if (!isRunning) {
                 return;
             }
 
-            List<CPos> sorted = new ArrayList<>(phase1Candidates.size());
+            List<CPos> afterPhase1 = new ArrayList<>(phase1Candidates.size());
             for (Long key : phase1Candidates) {
-                sorted.add(unpackChunkPos(key));
+                afterPhase1.add(unpackChunkPos(key));
             }
-            sorted.sort(Comparator.comparingLong(pos -> {
+            afterPhase1.sort(Comparator.comparingLong(pos -> {
                 long hx = 16L * pos.getX();
                 long hz = 16L * pos.getZ();
                 return hx * hx + hz * hz;
             }));
-            phase2Candidates = sorted;
+
+            // 阶段2：cubiomes 精确沼泽群系过滤（仅对阶段1幸存者）
+            AtomicLong biomeProcessed = new AtomicLong(0);
+            currentProcessedCount = biomeProcessed;
+            beginStage(2, afterPhase1.size());
+            List<CPos> afterBiome = runPhaseBiomeFilter(seed, searchThreadCount, afterPhase1, biomeProcessed);
+            if (!isRunning) {
+                return;
+            }
+
+            phase2Candidates = afterBiome;
             phase2Cursor = new AtomicInteger(0);
 
-            AtomicLong stage2Processed = new AtomicLong(0);
-            currentProcessedCount = stage2Processed;
-            beginStage(2, sorted.size());
+            AtomicLong stage3Processed = new AtomicLong(0);
+            currentProcessedCount = stage3Processed;
+            beginStage(3, afterBiome.size());
 
-            if (!sorted.isEmpty() && isRunning) {
-                runPhase2(seed, searchThreadCount, maxHeight, stage2Processed, resultCallback, checkGeneration);
+            if (!afterBiome.isEmpty() && isRunning) {
+                runPhase2(seed, searchThreadCount, maxHeight, stage3Processed, resultCallback, checkGeneration);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -305,7 +317,7 @@ public class SearchCoords {
         long processed = currentProcessedCount.get();
         long total = currentTotalTasks;
         int stage = currentStage;
-        double percentage = total > 0 ? (double) processed / total * 100.0 : (stage == 2 ? 100.0 : 0.0);
+        double percentage = total > 0 ? (double) processed / total * 100.0 : (stage >= 3 ? 100.0 : 0.0);
 
         if (isPaused) {
             pauseStartTime.updateAndGet(start -> start == 0 ? System.currentTimeMillis() : start);
@@ -353,6 +365,81 @@ public class SearchCoords {
         } while (isRunning && phase1AdjustPending);
     }
 
+    /**
+     * 阶段2：对阶段1幸存者做 cubiomes 精确沼泽群系检查；JNI 不可用时原样放行。
+     * 仅在少量候选上调用 JNI，避免阶段1全图热路径卡死。
+     */
+    private List<CPos> runPhaseBiomeFilter(long seed, int threadCount, List<CPos> input,
+                                           AtomicLong processedCount) throws InterruptedException {
+        Set<Long> passedKeys = ConcurrentHashMap.newKeySet();
+        final boolean jni = CubiomesBridge.isAvailable();
+        do {
+            phaseBiomeAdjustPending = false;
+            passedKeys.clear();
+            processedCount.set(0);
+            beginStage(2, input.size());
+            if (input.isEmpty()) {
+                break;
+            }
+            if (!jni) {
+                // 无 native 时不阻塞搜索：直接接受全部候选并走完进度
+                for (CPos pos : input) {
+                    if (!isRunning) {
+                        break;
+                    }
+                    passedKeys.add(packChunkPos(pos.getX(), pos.getZ()));
+                    processedCount.incrementAndGet();
+                }
+                break;
+            }
+            AtomicInteger cursor = new AtomicInteger(0);
+            int requested = currentThreadCount > 0 ? currentThreadCount : threadCount;
+            int poolSize = Math.min(requested, Math.max(1, input.size()));
+            List<Runnable> tasks = new ArrayList<>(poolSize);
+            for (int i = 0; i < poolSize; i++) {
+                tasks.add(() -> {
+                    metricsHook.regionWorkerStarted();
+                    try {
+                        while (isRunning) {
+                            waitIfPaused();
+                            if (!isRunning) {
+                                break;
+                            }
+                            int idx = cursor.getAndIncrement();
+                            if (idx >= input.size()) {
+                                break;
+                            }
+                            try {
+                                CPos pos = input.get(idx);
+                                int hutX = pos.getX() * 16;
+                                int hutZ = pos.getZ() * 16;
+                                if (CubiomesBridge.isSwampBiome(seed, hutX, hutZ, gameVersion, worldPresetMode)) {
+                                    passedKeys.add(packChunkPos(pos.getX(), pos.getZ()));
+                                }
+                            } finally {
+                                processedCount.incrementAndGet();
+                            }
+                        }
+                    } finally {
+                        metricsHook.regionWorkerStopped();
+                    }
+                });
+            }
+            runTasksAndWait(tasks, poolSize);
+        } while (isRunning && phaseBiomeAdjustPending);
+
+        List<CPos> out = new ArrayList<>(passedKeys.size());
+        for (Long key : passedKeys) {
+            out.add(unpackChunkPos(key));
+        }
+        out.sort(Comparator.comparingLong(pos -> {
+            long hx = 16L * pos.getX();
+            long hz = 16L * pos.getZ();
+            return hx * hx + hz * hz;
+        }));
+        return out;
+    }
+
     private void runPhase2(long seed, int threadCount, double maxHeight, AtomicLong processedCount,
                            Consumer<String> resultCallback, boolean checkGeneration) throws InterruptedException {
         do {
@@ -394,7 +481,21 @@ public class SearchCoords {
         }
         for (java.util.concurrent.Future<?> future : futures) {
             try {
-                future.get();
+                // 带超时轮询：停止/调线程时不会永久卡在 future.get()
+                while (isRunning) {
+                    try {
+                        future.get(200, TimeUnit.MILLISECONDS);
+                        break;
+                    } catch (java.util.concurrent.TimeoutException timeout) {
+                        if (!isRunning) {
+                            future.cancel(true);
+                            break;
+                        }
+                    }
+                }
+                if (!isRunning) {
+                    future.cancel(true);
+                }
             } catch (java.util.concurrent.CancellationException | java.util.concurrent.ExecutionException ignored) {
                 // 调线程数 shutdownNow 或任务内部异常时结束等待
             }
@@ -484,6 +585,8 @@ public class SearchCoords {
 
         if (currentStage == 1) {
             phase1AdjustPending = true;
+        } else if (currentStage == 2) {
+            phaseBiomeAdjustPending = true;
         } else {
             phase2AdjustPending = true;
         }
@@ -834,35 +937,85 @@ public class SearchCoords {
         return Math.ceil((totalHeight + remaining * (double) COLUMN_SCAN_MIN_Y) / HUT_FOOTPRINT_COLUMNS + 1.0);
     }
 
+    /**
+     * 阶段1群系启发式各参数采样结果（不含洞穴梯子/含水层/密度）。
+     * Cont 在原 check() 里排在梯子之后，但判定阈值与此处一致。
+     */
+    public record ClimateProbe(
+            double erosion,
+            double temperature,
+            double weirdness,
+            double continentalness,
+            boolean passErosion,
+            boolean passTemperature,
+            boolean passWeirdness,
+            boolean passContinentalness
+    ) {
+        public boolean passesClimate() {
+            return passErosion && passTemperature && passWeirdness && passContinentalness;
+        }
+
+        public String failReasons() {
+            StringBuilder sb = new StringBuilder();
+            if (!passErosion) {
+                sb.append("erosion");
+            }
+            if (!passTemperature) {
+                if (!sb.isEmpty()) sb.append(',');
+                sb.append("temperature");
+            }
+            if (!passWeirdness) {
+                if (!sb.isEmpty()) sb.append(',');
+                sb.append("weirdness");
+            }
+            if (!passContinentalness) {
+                if (!sb.isEmpty()) sb.append(',');
+                sb.append("continentalness");
+            }
+            return sb.isEmpty() ? "-" : sb.toString();
+        }
+    }
+
+    /** 阶段1群系四参数采样与阈值判定（1.21 等非 1.18.2：温度 [-0.45, 0.2]）。 */
+    public ClimateProbe sampleClimate(long seed, int hutX, int hutZ) {
+        if (worldPresetMode == WorldPresetMode.SINGLE_BIOME) {
+            return new ClimateProbe(0, 0, 0, 0, true, true, true, true);
+        }
+        WorldNoiseCache cache = getThreadResources(seed, worldPresetMode, metricsHook).noise;
+        int climateX = hutX + 8;
+        int climateZ = hutZ + 8;
+        double erosion = cache.erosion.sample((double) climateX / 4, 0, (double) climateZ / 4);
+        double temperature = cache.temperature.sample((double) climateX / 4, 0, (double) climateZ / 4);
+        double weirdness = cache.ridge.sample((double) climateX / 4, 0, (double) climateZ / 4);
+        double continentalness = cache.continentalness.sample((double) climateX / 4, 0, (double) climateZ / 4);
+
+        boolean passErosion = erosion >= 0.54; // 0.55会出现少量Java误杀的情况
+        boolean passTemperature;
+        if (mcVersion == MCVersion.v1_18_2) {
+            passTemperature = temperature >= -0.45;
+        } else {
+            passTemperature = temperature >= -0.45 && temperature <= 0.2;
+        }
+        boolean inWeirdnessGap = (weirdness > 0.42 && weirdness < 0.91)
+                || (weirdness < -0.42 && weirdness > -0.91);
+        boolean passWeirdness = !inWeirdnessGap;
+        if (gameVersion == GameVersion.V26_2 && weirdness <= -0.91) {
+            passWeirdness = false;
+        }
+        boolean passCont = continentalness >= -0.11;
+        return new ClimateProbe(erosion, temperature, weirdness, continentalness,
+                passErosion, passTemperature, passWeirdness, passCont);
+    }
+
     public boolean check(long seed, int x, int z, int maxHeight) {
         WorldNoiseCache cache = getThreadResources(seed, worldPresetMode, metricsHook).noise;
-        int climateX = x + 8;
-        int climateZ = z + 8;
         int heightX = x + 3;
         int heightZ = z + 3;
 
         boolean isSingleBiome = worldPresetMode == WorldPresetMode.SINGLE_BIOME;
-        if (!isSingleBiome) { // 检查群系
-            double erosionSample = cache.erosion.sample((double) climateX / 4, 0, (double) climateZ / 4);
-            if (erosionSample < 0.55) {
-                return false;
-            }
-            double temperature = cache.temperature.sample((double) climateX / 4, 0, (double) climateZ / 4);
-            // 1.18.2版本只检查温度不能小于-0.45，其他版本检查温度不能小于-0.45且不能大于0.2
-            if (mcVersion == MCVersion.v1_18_2) {
-                if (temperature < -0.45) {
-                    return false;
-                }
-            } else {
-                if (temperature > 0.2 || temperature < -0.45) {
-                    return false;
-                }
-            }
-            double ridge = cache.ridge.sample((double) climateX / 4, 0, (double) climateZ / 4);
-            if ((ridge > 0.42 && ridge < 0.91) || (ridge < -0.42 && ridge > -0.91)) {
-                return false;
-            }
-            if (gameVersion == GameVersion.V26_2 && ridge <= -0.91) {
+        ClimateProbe climate = sampleClimate(seed, x, z);
+        if (!isSingleBiome) {
+            if (!climate.passErosion() || !climate.passTemperature() || !climate.passWeirdness()) {
                 return false;
             }
         }
@@ -891,7 +1044,7 @@ public class SearchCoords {
                 return false;
             }
         }
-        if (!isSingleBiome && cache.continentalness.sample((double) climateX / 4, 0, (double) climateZ / 4) < -0.11) { // 检查大陆性
+        if (!isSingleBiome && !climate.passContinentalness()) {
             return false;
         }
         for (int y = maxHeight; y <= 60; y += 10) {

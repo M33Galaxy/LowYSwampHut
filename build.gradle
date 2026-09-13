@@ -11,7 +11,7 @@ java {
     targetCompatibility = '17'
 }
 group 'org.example'
-version '1.6.0'
+version '1.7.0'
 repositories {
     mavenCentral()
     gradlePluginPortal()
@@ -121,4 +121,88 @@ tasks.register('buildAllJars') {
         args "--profile=${profile}"
         jvmArgs '-Xms2g', '-Xmx4g'
     }
+}
+
+// cubiomes JNI: build DLL and package into JAR resources
+def generatedNativeResourcesDir = layout.buildDirectory.dir('generated/native-resources')
+def windowsDll = file('native/windows/libLowYSwampHutJ.dll')
+def jniBat = file('jni/build-jni.bat')
+
+tasks.register('buildNativeWindows', Exec) {
+    group = 'build'
+    description = 'Builds libLowYSwampHutJ.dll via jni/build-jni.bat'
+    workingDir = file('jni')
+    commandLine 'cmd', '/c', 'build-jni.bat'
+    onlyIf {
+        System.getProperty('os.name').toLowerCase().contains('windows') && jniBat.exists()
+    }
+    inputs.files(
+        fileTree('jni') {
+            include 'SwampHutPhase1.cpp', 'SwampHutPhase1.h',
+                    'build-jni.bat',
+                    'cxx_compat/*.h',
+                    'native/jni/**/*.cpp', 'native/jni/**/*.h',
+                    'cubiomes/generator.{c,h}', 'cubiomes/layers.{c,h}',
+                    'cubiomes/biomenoise.{c,h}', 'cubiomes/biomes.{c,h}',
+                    'cubiomes/noise.{c,h}', 'cubiomes/util.{c,h}',
+                    'cubiomes/finders.h', 'cubiomes/rng.h', 'cubiomes/tables/*.h'
+        }
+    )
+    outputs.file(windowsDll)
+}
+
+tasks.register('prepareNativeResources') {
+    group = 'build'
+    description = 'Collects prebuilt dll/so/dylib from native/ into jar resources'
+    dependsOn tasks.named('buildNativeWindows')
+    inputs.files(windowsDll)
+    outputs.dir(generatedNativeResourcesDir)
+    doLast {
+        def outDir = generatedNativeResourcesDir.get().asFile
+        delete(outDir)
+        outDir.mkdirs()
+        def windowsDir = file('native/windows')
+        if (!windowsDll.exists()) {
+            throw new GradleException(
+                    'Missing native/windows/libLowYSwampHutJ.dll. Run jni/build-jni.bat.')
+        }
+        copy {
+            from(windowsDir)
+            include('*.dll')
+            into(new File(outDir, 'native/windows'))
+        }
+        def linuxDir = file('native/linux')
+        if (linuxDir.exists()) {
+            copy {
+                from(linuxDir)
+                include('*.so')
+                into(new File(outDir, 'native/linux'))
+            }
+        }
+        def macosDir = file('native/macos')
+        if (macosDir.exists()) {
+            copy {
+                from(macosDir)
+                include('*.dylib')
+                into(new File(outDir, 'native/macos'))
+            }
+        }
+    }
+}
+
+tasks.named('processResources') {
+    dependsOn tasks.named('prepareNativeResources')
+    from(generatedNativeResourcesDir)
+}
+
+tasks.named('shadowJar') {
+    dependsOn tasks.named('prepareNativeResources')
+}
+
+tasks.named('buildMainJar') {
+    dependsOn tasks.named('prepareNativeResources')
+}
+
+tasks.named('test') {
+    dependsOn tasks.named('buildNativeWindows')
 }

@@ -270,7 +270,11 @@ public final class CmdLineRunner {
                         return;
                     }
                     lastProgressPrintMs.set(now);
-                    String stage = progress.stage() == 1 ? i18n.get("cli.stage1") : i18n.get("cli.stage2");
+                    String stage = switch (progress.stage()) {
+                        case 1 -> i18n.get("cli.stage1");
+                        case 2 -> i18n.get("cli.stage2");
+                        default -> i18n.get("cli.stage3");
+                    };
                     printProgressLine(assembleProgress(
                             stage + " " + formatPercent(progress.percentage()),
                             i18n.get("cli.elapsedShort", formatCompactTime(System.currentTimeMillis() - startTime)),
@@ -512,7 +516,11 @@ public final class CmdLineRunner {
     }
 
     private static String formatSingleProgress(SearchCoords.ProgressInfo progress) {
-        String stage = progress.stage() == 1 ? i18n.get("cli.stage1") : i18n.get("cli.stage2");
+        String stage = switch (progress.stage()) {
+            case 1 -> i18n.get("cli.stage1");
+            case 2 -> i18n.get("cli.stage2");
+            default -> i18n.get("cli.stage3");
+        };
         String remaining = formatRemaining(progress.remainingMs(), progress.processed(), progress.total());
         return assembleProgress(
                 stage + " " + formatPercent(progress.percentage()),
