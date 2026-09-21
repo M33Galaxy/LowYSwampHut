@@ -1,0 +1,345 @@
+/* lysh eval.c —— 见 eval.h。产品路径的唯一编排层。
+ *
+ * 这里**不实现任何世界生成数学**，只做：
+ *   1. 朝向（唯一一份配方，见 eval.h 顶部）
+ *   2. footprint 63 列的 avg_y 与灌水判定（调用 phase2 / aquifer 的既有函数）
+ *   3. 门槛比较
+ * 所以它不可能与已被对拍过的阶段 1/阶段 2 产生分歧。
+ */
+#include "eval.h"
+
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "column_top.h"
+#include "rng.h"
+#include "search.h"
+#include "structure.h"
+
+#if defined(_WIN32)
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
+#else
+#  include <time.h>
+#endif
+
+static double eval_now_ms(void) {
+#if defined(_WIN32)
+    return (double)GetTickCount64();
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1.0e6;
+#endif
+}
+
+/* ------------------------------------------------------------------ */
+/* 朝向                                                                */
+/* ------------------------------------------------------------------ */
+int lysh_hut_orientation(uint64_t world_seed, int hut_x, int hut_z) {
+    /* r = WorldgenRandom(new LegacyRandomSource(0));
+     * r.setLargeFeatureSeed(worldSeed, chunkX, chunkZ);   // = 两次 nextLong 后异或
+     * dir = r.nextInt(4);                                 // 0=N 1=E 2=S 3=W
+     * 播种部分与结构放置用的 lysh_set_carver_seed 相同（同一个 s）；
+     * 区别只在第一次抽样用 nextInt(4) 而不是 nextFloat()。 */
+    lysh_lcg r;
+    lysh_set_carver_seed(&r, world_seed, hut_x >> 4, hut_z >> 4);
+    return lysh_lcg_next_int_bound(&r, 4);
+}
+
+/* ------------------------------------------------------------------ */
+/* ctx                                                                 */
+/* ------------------------------------------------------------------ */
+/* 含水层的列顶回调：user 指向 ctx->p2.terrain（`preliminarySurfaceLevel`）。 */
+static int eval_column_top_cb(void *user, int x, int z) {
+    return lysh_preliminary_surface_level((const lysh_terrain *)user, x, z);
+}
+
+/* 群系门的列顶回调：user 指向 ctx->p2，给出 **WORLD_SURFACE_WG** 高度。
+ * 口径（见 biome.h 的取证）：getFirstOccupiedHeight = getBaseHeight(WORLD_SURFACE_WG) - 1，
+ * 而 lysh_phase2_height 就是那个 NOT_AIR 谓词的 getBaseHeight（返回 y+1）。 */
+static int eval_biome_height_cb(void *user, int x, int z) {
+    return lysh_phase2_height((lysh_phase2 *)user, x, z);
+}
+
+void lysh_search_ctx_init(lysh_search_ctx *ctx, uint64_t world_seed,
+                          const lysh_phase1_opts *opts, int max_height) {
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->seed = world_seed;
+    if (opts) ctx->opts = *opts;
+    ctx->max_height = max_height;
+    ctx->large_biomes = ctx->opts.large_biomes;
+
+    lysh_phase1_init(&ctx->p1, world_seed, &ctx->opts);
+
+    lysh_phase2_init(&ctx->p2, world_seed, ctx->large_biomes);
+    /* 含水层的 skipSamplingAboveY 需要列顶回调；这里把它接上（与 hut_judge.c /
+     * dencol_diff.c 完全一致）。user 是 terrain 本身，phase2 生命周期内有效。 */
+    lysh_phase2_set_column_top(&ctx->p2, eval_column_top_cb, &ctx->p2.terrain);
+    /* 真实群系门只要两个噪声（温度 / 植被）加一棵参数树；NORMAL 用
+     * minecraft:temperature / minecraft:vegetation，LARGE_BIOMES 用 _large 变体。
+     * 参数树必须按版本选（1.18.2 没有 mangrove_swamp，见 biome.h）。 */
+    int tree_sel = ctx->opts.mc_1_18_2 ? LYSH_BIOME_TREE_1_18
+                 : (ctx->opts.pre_26_2 ? LYSH_BIOME_TREE_1_21_5 : LYSH_BIOME_TREE_26_2);
+    lysh_biome_init(&ctx->biome, world_seed, ctx->large_biomes, tree_sel);
+    ctx->inited = 1;
+}
+
+void lysh_search_ctx_free(lysh_search_ctx *ctx) {
+    if (!ctx) return;
+    if (ctx->inited) lysh_phase2_free(&ctx->p2);
+    ctx->inited = 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* 单候选评估                                                          */
+/* ------------------------------------------------------------------ */
+lysh_hut_result lysh_eval_hut(lysh_search_ctx *ctx, int hut_x, int hut_z, int max_y) {
+    lysh_hut_result r;
+    memset(&r, 0, sizeof(r));
+    r.hut_x = hut_x;
+    r.hut_z = hut_z;
+    /* 区域格：生产代码是 hutX/32（regionX*32+j 的逆），负数用 floorDiv */
+    r.rx = hut_x / 32; if (hut_x < 0 && hut_x % 32) r.rx--;
+    r.rz = hut_z / 32; if (hut_z < 0 && hut_z % 32) r.rz--;
+
+    r.dir = lysh_hut_orientation(ctx->seed, hut_x, hut_z);
+    r.axis_z = (r.dir == 0 || r.dir == 2);
+    r.size_x = r.axis_z ? 7 : 9;
+    r.size_z = r.axis_z ? 9 : 7;
+
+    /* ---- 真实群系门（游戏里的顺序：isValidBiome 先于放置）----
+     * chunk 中心列地表是不是沼泽系群系。阶段 1 的气候门只是近似，少了这一门会多报
+     * 候选（实测全图 4 个）。成本只有 7593×6×2 次整数运算，远小于下面 63 列的阶段 2，
+     * 而阶段 1 幸存者本来就极少（全图 15 个），所以这里照旧把 footprint 也算出来，
+     * 让 `lysh hut` 能同时给出两组证据。 */
+    lysh_biome_result br;
+    lysh_swamp_hut_biome_ok(&ctx->biome, &ctx->p2.terrain, hut_x, hut_z,
+                            eval_biome_height_cb, &ctx->p2, &br);
+    r.biome_ok = br.ok;
+    r.biome_winner = br.winner;
+    r.biome_qx = br.target.qx;
+    r.biome_qy = br.target.qy;
+    r.biome_qz = br.target.qz;
+    r.biome_occ_y = br.target.occ_y;
+    for (int i = 0; i < 6; i++) r.biome_t[i] = br.target.t[i];
+
+    /* 63 列的精确高度 + y=62 的含水层判定。
+     * 判定口径（README / hut_judge.c）：computeFluid(x,62,z).at(62)==WATER
+     * —— 直接问 aquifer，不经过密度，避免密度误差污染判定。 */
+    long long sum = 0;
+    int wet = 0;
+    for (int dx = 0; dx < r.size_x; dx++) {
+        for (int dz = 0; dz < r.size_z; dz++) {
+            int x = hut_x + dx, z = hut_z + dz;
+            sum += lysh_phase2_height(&ctx->p2, x, z);
+
+            int level;
+            lysh_block_state type;
+            lysh_aquifer_compute_fluid(&ctx->p2.aquifer, x, 62, z, &level, &type);
+            if (type == LYSH_BLOCK_WATER && 62 < level) wet++;
+        }
+    }
+    r.sum_h = sum;
+    r.avg_y = (int)(sum / 63);      /* C 的整数除法：向零截断（= oracle 的口径） */
+    r.wet_columns = wet;
+    r.flooded = (wet == 63);
+    r.all_dry = (wet == 0);
+
+    if (!r.biome_ok)     { r.ok = 0; r.reject = LYSH_HUT_REJECT_BIOME; }
+    else if (r.avg_y > max_y) { r.ok = 0; r.reject = LYSH_HUT_REJECT_Y; }
+    else if (r.flooded)  { r.ok = 0; r.reject = LYSH_HUT_REJECT_FLOOD; }
+    else                 { r.ok = 1; r.reject = LYSH_HUT_OK; }
+    return r;
+}
+
+/* 与 Java 产品 `SearchCoords.Result.toString()` 完全同一口径的一行。
+ * avg_y 在 26.1.2 的语义下就是 footprint 平均高度，`%.0f` 对整数不改变数值，
+ * 所以这里直接按整数打印（Java 侧还有 -1 的偏移，见 README §2.5.6）。 */
+const char *lysh_hut_tp_line(const lysh_hut_result *r) {
+    static char buf[96];
+    snprintf(buf, sizeof(buf), "/tp %d %.0f %d", r->hut_x, (double)r->avg_y, r->hut_z);
+    return buf;
+}
+
+/* ------------------------------------------------------------------ */
+/* 扁平成绩单                                                          */
+/* ------------------------------------------------------------------ */
+static void grade_fill_hit(int *dst, const lysh_hut_result *r) {
+    dst[0] = r->hut_x;
+    dst[1] = r->hut_z;
+    dst[2] = r->rx;
+    dst[3] = r->rz;
+    dst[4] = r->dir;
+    dst[5] = r->avg_y;
+    dst[6] = r->flooded;
+    dst[7] = r->ok;
+    dst[8] = r->wet_columns;
+    dst[9] = r->size_x;
+    dst[10] = r->size_z;
+    dst[11] = r->reject;
+}
+
+/* 阶段 1 幸存者钩子：把阶段 2 的评估塞进 lysh_scan_rect 的 worker 里，
+ * 这样"阶段 1 之后再做阶段 2"就是内核里的同一条路径，CLI 与 JNI 都只调它。
+ *
+ * ⚠️ 最要紧的一点：钩子是**多线程并发**调用的（每个 worker 一个线程）。
+ *    `lysh_hut_grade` 里的 accepted/evaluated 是必须原子累加的计数器，
+ *    而 `hits` 还需要一个"写到哪了"的游标 —— 直接在共享结构上写就是数据竞争，
+ *    会静默产生"统计说 0、明细有 1"这种自相矛盾的结果（实测踩过）。
+ *    所以：
+ *      ① worker 线程里只往 **ctx 上挂的私有 slot** 记账 + 存一份"决定"；
+ *      ② 扫完之后**单线程**按 slot 顺序回放这些决定、填明细。
+ *    回放是纯读取 + 一次 lysh_eval_hut（同一个 ctx 完全确定性），所以结果
+ *    与在 worker 里直接填完全一致，但没有任何并发写。 */
+typedef struct {
+    int hut_x, hut_z;           /* 该 worker 决定过的候选（按评估顺序） */
+    int ok;                     /* 1 = 通过（只有通过的要回放） */
+} grade_decision_t;
+
+#define GRADE_SLOT_MAX_DECISIONS 1024
+
+typedef struct {
+    int max_y;
+    int n_decisions;            /* 每线程：记下的决定数（含被拒的，回放时只填 ok） */
+    int n_ok;                   /* 每线程：通过数（= 需要回放的条数） */
+    long long evaluated;        /* 每线程：评估数 */
+    long long rejected_y, rejected_flood, rejected_biome;
+    grade_decision_t decisions[GRADE_SLOT_MAX_DECISIONS];
+} grade_slot_t;
+
+typedef struct {
+    int max_y;
+    int nthreads;
+    grade_slot_t *slots;
+    lysh_hut_grade shared;      /* 只读：hits / hits_cap 由调用方给 */
+} grade_scan_hook_t;
+
+/* 每个 worker 第一次需要阶段 2 时调用：给它的 ctx 挂一份私有 slot */
+static void grade_scan_ctx_init(void *user, lysh_search_ctx *ctx, int thread_index) {
+    grade_scan_hook_t *h = (grade_scan_hook_t *)user;
+    if (thread_index < 0 || thread_index >= h->nthreads) return;
+    grade_slot_t *s = &h->slots[thread_index];
+    memset(s, 0, sizeof(*s));
+    s->max_y = h->max_y;
+    ctx->p2_slot = s;
+}
+
+static int grade_scan_on_survivor(void *user, lysh_search_ctx *ctx,
+                                  int rx, int rz, int hut_x, int hut_z) {
+    grade_scan_hook_t *h = (grade_scan_hook_t *)user;
+    (void)rx; (void)rz;
+    grade_slot_t *s = (grade_slot_t *)ctx->p2_slot;
+    if (!s) {
+        /* 没有 slot（不该发生）：退回只判定、不记明细 */
+        lysh_hut_result r0 = lysh_eval_hut(ctx, hut_x, hut_z, h->max_y);
+        return r0.ok;
+    }
+    lysh_hut_result r = lysh_eval_hut(ctx, hut_x, hut_z, s->max_y);
+    s->evaluated++;
+    if (r.ok) s->n_ok++;
+    else if (r.reject == LYSH_HUT_REJECT_BIOME) s->rejected_biome++;
+    else if (r.reject == LYSH_HUT_REJECT_Y) s->rejected_y++;
+    else if (r.reject == LYSH_HUT_REJECT_FLOOD) s->rejected_flood++;
+
+    /* 记决定（只有通过的需要回放；slot 满了就丢掉明细但保留计数） */
+    if (r.ok && s->n_decisions < GRADE_SLOT_MAX_DECISIONS) {
+        s->decisions[s->n_decisions].hut_x = hut_x;
+        s->decisions[s->n_decisions].hut_z = hut_z;
+        s->decisions[s->n_decisions].ok = 1;
+        s->n_decisions++;
+    }
+    return r.ok;
+}
+
+void lysh_grade_scan(uint64_t world_seed, const lysh_phase1_opts *opts, int max_height,
+                     int rx0, int rx1, int rz0, int rz1, int salt, int threads,
+                     int max_y,
+                     lysh_hut_grade *grade) {
+    grade_scan_hook_t h;
+    memset(&h, 0, sizeof(h));
+    h.max_y = max_y;
+    if (grade) {
+        h.shared.hits = grade->hits;
+        h.shared.hits_cap = grade->hits_cap;
+    }
+
+    lysh_scan_opts o;
+    memset(&o, 0, sizeof(o));
+    o.seed = world_seed;
+    if (opts) o.opts = *opts;
+    o.max_height = max_height;
+    o.salt = salt ? salt : LYSH_SWAMP_HUT_SALT;
+    o.threads = threads;
+    o.phase2_hook = grade_scan_on_survivor;
+    o.phase2_user = &h;
+
+    /* worker 数由 search.c 决定（= min(请求/核数, 行数)）；这里给足 slot。 */
+    int want = threads > 0 ? threads : lysh_cpu_count();
+    if (want < 1) want = 1;
+    long long rows = (long long)rz1 - rz0;
+    if ((long long)want > rows) want = (int)rows;
+    if (want < 1) want = 1;
+    h.nthreads = want;
+    h.slots = (grade_slot_t *)calloc((size_t)want, sizeof(grade_slot_t));
+    if (!h.slots) {                     /* 内存不够：退回只统计 */
+        h.nthreads = 0;
+        o.phase2_ctx_init = NULL;
+    } else {
+        o.phase2_ctx_init = grade_scan_ctx_init;
+    }
+
+    lysh_scan_result res;
+    double t0 = eval_now_ms();
+    if (lysh_scan_rect(&o, rx0, rx1, rz0, rz1, &res) != 0) {
+        free(h.slots);
+        if (grade) memset(grade, 0, sizeof(*grade));
+        return;
+    }
+    double p2_cpu_ms = res.p2_seconds * 1000.0;
+    long long scanned = res.scanned;
+
+    /* 单线程合并各 slot：计数直接相加；明细按 slot 顺序回放。 */
+    lysh_hut_grade merged;
+    memset(&merged, 0, sizeof(merged));
+    merged.ms = eval_now_ms() - t0;
+    merged.p2_ms = p2_cpu_ms;
+    merged.scanned = scanned;
+    merged.hits = h.shared.hits;
+    merged.hits_cap = h.shared.hits_cap;
+
+    for (int t = 0; t < h.nthreads; t++) {
+        grade_slot_t *s = &h.slots[t];
+        merged.evaluated += s->evaluated;
+        merged.accepted += s->n_ok;
+        merged.rejected_y += s->rejected_y;
+        merged.rejected_flood += s->rejected_flood;
+        merged.rejected_biome += s->rejected_biome;
+    }
+
+    /* 回放：把每个 slot 记下的"通过"决定重新算一遍（确定性完全一样），
+     * 顺序写进调用方的缓冲 —— 单线程，无竞争。 */
+    int out_n = 0;
+    if (merged.hits && merged.hits_cap > 0 && merged.accepted > 0) {
+        lysh_search_ctx ctx;
+        lysh_search_ctx_init(&ctx, world_seed, opts, max_height);
+        for (int t = 0; t < h.nthreads && out_n < merged.hits_cap; t++) {
+            grade_slot_t *s = &h.slots[t];
+            for (int i = 0; i < s->n_decisions && out_n < merged.hits_cap; i++) {
+                if (!s->decisions[i].ok) continue;
+                lysh_hut_result r = lysh_eval_hut(&ctx, s->decisions[i].hut_x,
+                                                  s->decisions[i].hut_z, max_y);
+                if (!r.ok) continue;        /* 理论上不会发生；发生了就不填 */
+                grade_fill_hit(merged.hits + (size_t)out_n * LYSH_HUT_GRADE_INTS, &r);
+                out_n++;
+            }
+        }
+        lysh_search_ctx_free(&ctx);
+    }
+    merged.hits_written = out_n;
+
+    free(h.slots);
+    if (grade) *grade = merged;
+}

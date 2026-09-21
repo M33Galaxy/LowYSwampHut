@@ -1,0 +1,18 @@
+# 所有文件按字节原样存储，不做换行转换。
+#
+# 原因：本仓库混合了 LF（lysh-c/src/*.c，MinGW gcc 的规范来源）与 CRLF
+# （lysh-c\README.md）两种换行；且源码与文档含 UTF-8 中文。
+# 一旦让 git 自动转换，Windows 检出会把 .c 变成 CRLF、而不同平台 clone 的
+# 字节不再一致 —— 这个项目的正确性对字节敏感（曾因代码页/换行静默丢语句）。
+# 所以：不转换，磁盘上是什么，仓库里就是什么。
+* -text
+
+# 二进制资产显式标注（归档 zip / DLL / 字体 / 打包 jar）
+*.zip  binary
+*.dll  binary
+*.ttf  binary
+*.jar  binary
+*.exe  binary
+
+# 归档的 zip 在 diff/统计里不展开
+_archive/** -diff

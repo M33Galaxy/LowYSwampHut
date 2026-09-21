@@ -1,0 +1,53 @@
+# ---------------------------------------------------------------------------
+# 仓库根（C:\LowYSwampHut-main2）的忽略规则。
+#
+# 背景：`LowYSwampHut-main/.gitignore` 只覆盖它**自己那一层**（/dist/、seedCheckerLib/
+# 等都是相对 LowYSwampHut-main 解析的），而构建产物、打包产物、日志与开发期 scratch
+# 全都落在仓库根。这份文件补上根这一层，免得清理过的东西又长回来。
+# ---------------------------------------------------------------------------
+
+# 构建产物（CMake / MinGW；lysh.dll 与 lysh.exe 在这里重新生成）
+lysh-c/build/
+
+# 打包产物：dist\ 是发布目录，由 LowYSwampHut-main\build-dist.ps1 生成
+/dist/
+_trash_*/
+
+# build-dist.ps1 的编译中转（javac 输出 + 日志 + MANIFEST）
+_scratch/
+
+# 搜索的默认输出文件名（CmdLineRunner / CLI 的 `-o` 默认值），冒烟测试会写这个
+result.txt
+dist/result.txt
+*.jar.bak
+
+# 开发期日志（曾经提交过；现在只在本地跑的时候出现）
+logs/
+lysh-c/logs/
+
+# 已归档的开发期目录：内容都在 _archive\*.zip 里，别再把目录本身加回来
+_scratch2/
+probe/
+seedCheckerLib/
+
+# 一次性/临时文件
+_verguard_tmp.txt
+*.tmp
+
+# ---------------------------------------------------------------------------
+# 上传 GitHub 时排除的非必要内容（本地保留，见 README 的归档说明）
+# ---------------------------------------------------------------------------
+
+# 开发期取证归档（26 MB）：源码注释里仍有 30+ 处引用它们作为出处，
+# 但这些 zip 只是本地资料，不进公开仓库。
+_archive/
+
+# Gradle 全套：build-dist.ps1 用纯 javac + jar，已声明 Gradle 不是默认路径。
+LowYSwampHut-main/build.gradle
+LowYSwampHut-main/settings.gradle.kts
+LowYSwampHut-main/gradlew
+LowYSwampHut-main/gradlew.bat
+LowYSwampHut-main/gradle/
+
+# 源码目录下那个 run.bat 是历史遗留；交付用的启动器由 build-dist.ps1 生成到 dist\run.bat。
+LowYSwampHut-main/run.bat
