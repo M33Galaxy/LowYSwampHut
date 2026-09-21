@@ -254,10 +254,66 @@ static int grade_scan_on_survivor(void *user, lysh_search_ctx *ctx,
     return r.ok;
 }
 
-void lysh_grade_scan(uint64_t world_seed, const lysh_phase1_opts *opts, int max_height,
-                     int rx0, int rx1, int rz0, int rz1, int salt, int threads,
-                     int max_y,
-                     lysh_hut_grade *grade) {
+/* ------------------------------------------------------------------ */
+/* 扫描会话（见 eval.h 末尾）                                          */
+/* ------------------------------------------------------------------ */
+struct lysh_scan_session {
+    uint64_t seed;
+    lysh_phase1_opts opts;
+    int max_height;
+    int salt;
+    int threads;                /* 已解析的 worker 数（>= 1） */
+    int nctx;
+    lysh_search_ctx **ctx;      /* 每个 worker 一份；open 时建好，跨 band 复用 */
+};
+
+lysh_scan_session *lysh_scan_session_open(uint64_t world_seed,
+                                          const lysh_phase1_opts *opts,
+                                          int max_height, int salt, int threads) {
+    int want = threads > 0 ? threads : lysh_cpu_count();
+    if (want < 1) want = 1;
+
+    lysh_scan_session *s = (lysh_scan_session *)calloc(1, sizeof(*s));
+    if (!s) return NULL;
+    s->ctx = (lysh_search_ctx **)calloc((size_t)want, sizeof(*s->ctx));
+    if (!s->ctx) { free(s); return NULL; }
+
+    s->seed = world_seed;
+    if (opts) s->opts = *opts;
+    s->max_height = max_height;
+    s->salt = salt ? salt : LYSH_SWAMP_HUT_SALT;
+    s->threads = want;
+    s->nctx = want;
+
+    /* ⚠️ 会话存在的唯一理由：每个 worker 的噪声栈**只在这里初始化一次**。
+     * 之后无论扫多少个带，都不会再付一次初始化的代价。 */
+    for (int i = 0; i < want; i++) {
+        s->ctx[i] = (lysh_search_ctx *)calloc(1, sizeof(*s->ctx[i]));
+        if (!s->ctx[i]) { lysh_scan_session_free(s); return NULL; }
+        lysh_search_ctx_init(s->ctx[i], world_seed, &s->opts, max_height);
+    }
+    return s;
+}
+
+void lysh_scan_session_free(lysh_scan_session *s) {
+    if (!s) return;
+    if (s->ctx) {
+        for (int i = 0; i < s->nctx; i++) {
+            if (!s->ctx[i]) continue;
+            lysh_search_ctx_free(s->ctx[i]);
+            free(s->ctx[i]);
+        }
+        free(s->ctx);
+    }
+    free(s);
+}
+
+/* 用一个会话已建好的 ctx 扫一个带，填 *grade（语义与老的 lysh_grade_scan 逐字段一致）。 */
+void lysh_scan_session_band(lysh_scan_session *s,
+                            int rx0, int rx1, int rz0, int rz1,
+                            int max_y, lysh_hut_grade *grade) {
+    if (!s) { if (grade) memset(grade, 0, sizeof(*grade)); return; }
+
     grade_scan_hook_t h;
     memset(&h, 0, sizeof(h));
     h.max_y = max_y;
@@ -266,19 +322,25 @@ void lysh_grade_scan(uint64_t world_seed, const lysh_phase1_opts *opts, int max_
         h.shared.hits_cap = grade->hits_cap;
     }
 
+    /* 每个带开头清掉上一带挂上的每线程游标：slot 数组在本带末尾就释放了，
+     * 而池里的 ctx 会活到下一个带，不清就是悬垂指针。 */
+    for (int i = 0; i < s->nctx; i++) s->ctx[i]->p2_slot = NULL;
+
     lysh_scan_opts o;
     memset(&o, 0, sizeof(o));
-    o.seed = world_seed;
-    if (opts) o.opts = *opts;
-    o.max_height = max_height;
-    o.salt = salt ? salt : LYSH_SWAMP_HUT_SALT;
-    o.threads = threads;
+    o.seed = s->seed;
+    o.opts = s->opts;
+    o.max_height = s->max_height;
+    o.salt = s->salt;
+    o.threads = s->threads;
     o.phase2_hook = grade_scan_on_survivor;
     o.phase2_user = &h;
+    /* 预建的 worker ctx：worker 不再自己 init，也不释放（生命周期归本会话）。 */
+    o.phase2_ctx_pool = s->ctx;
 
-    /* worker 数由 search.c 决定（= min(请求/核数, 行数)）；这里给足 slot。 */
-    int want = threads > 0 ? threads : lysh_cpu_count();
-    if (want < 1) want = 1;
+    /* worker 数由 search.c 决定（= min(请求/核数, 行数)）；这里给足 slot。
+     * 池子按 s->threads 建，所以下标一定落在池内。 */
+    int want = s->threads;
     long long rows = (long long)rz1 - rz0;
     if ((long long)want > rows) want = (int)rows;
     if (want < 1) want = 1;
@@ -311,35 +373,50 @@ void lysh_grade_scan(uint64_t world_seed, const lysh_phase1_opts *opts, int max_
     merged.hits_cap = h.shared.hits_cap;
 
     for (int t = 0; t < h.nthreads; t++) {
-        grade_slot_t *s = &h.slots[t];
-        merged.evaluated += s->evaluated;
-        merged.accepted += s->n_ok;
-        merged.rejected_y += s->rejected_y;
-        merged.rejected_flood += s->rejected_flood;
-        merged.rejected_biome += s->rejected_biome;
+        grade_slot_t *sl = &h.slots[t];
+        merged.evaluated += sl->evaluated;
+        merged.accepted += sl->n_ok;
+        merged.rejected_y += sl->rejected_y;
+        merged.rejected_flood += sl->rejected_flood;
+        merged.rejected_biome += sl->rejected_biome;
     }
 
     /* 回放：把每个 slot 记下的"通过"决定重新算一遍（确定性完全一样），
-     * 顺序写进调用方的缓冲 —— 单线程，无竞争。 */
+     * 顺序写进调用方的缓冲 —— 单线程，无竞争。
+     * ⚠️ 这里**不新建 ctx**：worker 已全部 join，直接用 ctx[0]（第一个 worker 的
+     *    ctx）即可 —— 一个种子因此只初始化一次噪声栈。 */
     int out_n = 0;
     if (merged.hits && merged.hits_cap > 0 && merged.accepted > 0) {
-        lysh_search_ctx ctx;
-        lysh_search_ctx_init(&ctx, world_seed, opts, max_height);
+        lysh_search_ctx *rctx = s->ctx[0];
         for (int t = 0; t < h.nthreads && out_n < merged.hits_cap; t++) {
-            grade_slot_t *s = &h.slots[t];
-            for (int i = 0; i < s->n_decisions && out_n < merged.hits_cap; i++) {
-                if (!s->decisions[i].ok) continue;
-                lysh_hut_result r = lysh_eval_hut(&ctx, s->decisions[i].hut_x,
-                                                  s->decisions[i].hut_z, max_y);
+            grade_slot_t *sl = &h.slots[t];
+            for (int i = 0; i < sl->n_decisions && out_n < merged.hits_cap; i++) {
+                if (!sl->decisions[i].ok) continue;
+                lysh_hut_result r = lysh_eval_hut(rctx, sl->decisions[i].hut_x,
+                                                  sl->decisions[i].hut_z, max_y);
                 if (!r.ok) continue;        /* 理论上不会发生；发生了就不填 */
                 grade_fill_hit(merged.hits + (size_t)out_n * LYSH_HUT_GRADE_INTS, &r);
                 out_n++;
             }
         }
-        lysh_search_ctx_free(&ctx);
     }
     merged.hits_written = out_n;
 
     free(h.slots);
     if (grade) *grade = merged;
+}
+
+/* 便捷入口：一个种子的**一个**带。= 开会话 → 扫一带 → 关会话。
+ * 签名与可观察行为与历史上那次"直接扫"完全一致（CLI / JNI 都还在用它）。 */
+void lysh_grade_scan(uint64_t world_seed, const lysh_phase1_opts *opts, int max_height,
+                     int rx0, int rx1, int rz0, int rz1, int salt, int threads,
+                     int max_y,
+                     lysh_hut_grade *grade) {
+    lysh_scan_session *s = lysh_scan_session_open(world_seed, opts, max_height, salt, threads);
+    if (!s) {
+        if (grade) memset(grade, 0, sizeof(*grade));
+        return;
+    }
+    lysh_scan_session_band(s, rx0, rx1, rz0, rz1, max_y, grade);
+    lysh_scan_session_free(s);
 }

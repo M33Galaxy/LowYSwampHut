@@ -41,6 +41,10 @@
  * 每条线程一份，**不要在热循环里反复 init**）。一个 ctx 不是线程安全的：
  * 它带可变缓存（含水层网格 / cell 插值格），每条线程要用自己的 ctx。
  * 也**不要**在多个线程间共享同一个 ctx。
+ *
+ * 需要"同一种子扫很多个带"时（Java 多种子模式就是），用文件末尾的
+ * `lysh_scan_session`：ctx 只在 open 时建一次，之后每个带复用，
+ * 连明细回放也不再新建 ctx。**不要**在带循环里反复调 lysh_grade_scan。
  */
 #ifndef LYSH_EVAL_H
 #define LYSH_EVAL_H
@@ -154,6 +158,8 @@ const char *lysh_hut_tp_line(const lysh_hut_result *r);
  * lysh_grade_scan：对 [rx0,rx1)×[rz0,rz1) 里**通过阶段 1 的**候选逐个评估
  *                  （阶段 1 的那一步与 lysh scan 完全是同一条代码路径）。
  *                  `evaluated` 计的是阶段 1 幸存数，不是区域格数。
+ *                  现在它是「开会话 → 扫一个带 → 关会话」的薄包装（见下面
+ *                  lysh_scan_session），签名与可观察行为都没变。
  *
  * （历史上有过一个"对候选数组逐个评估"的 lysh_grade_huts：它既没有产品调用方，
  *   归档工具也只用了 lysh_grade_scan，已删除 —— 不要再加回来。）
@@ -162,6 +168,41 @@ void lysh_grade_scan(uint64_t world_seed, const lysh_phase1_opts *opts, int max_
                      int rx0, int rx1, int rz0, int rz1, int salt, int threads,
                      int max_y,
                      lysh_hut_grade *grade);
+
+/* ------------------------------------------------------------------ *
+ * 扫描会话（性能修复：一个种子只初始化一次噪声栈）
+ *
+ * 背景（实测）：Java 多种子模式把一个种子的扫描切成 MAX_SCAN_BANDS = 256 个 Z 带，
+ * 每带一次 JNI 调用。而老的 lysh_grade_scan 每次都重新建/销毁 worker ctx
+ * （= 重跑整条噪声初始化），还要为**明细回放**再建一次。实测 65,536 格：
+ *   256 带 → 95.4 ms/种子；128 带（同面积）→ 50.1 ms/种子；纯计算只要 ~7.5 ms。
+ * 成本因此只跟**带数**走（每带 2 次初始化 ≈ 0.19 ms），跟面积无关。
+ *
+ * 会话把这层代价挪到"每个种子一次"：
+ *   · open   —— 建好 threads 个 worker ctx（每个恰好一次 lysh_search_ctx_init），
+ *               记下 seed / opts / max_height / salt / threads；失败返回 NULL。
+ *   · band   —— 扫 [rx0,rx1)×[rz0,rz1) 这一个带，复用上面那批 ctx，填 *grade
+ *               的字段与命中布局与 lysh_grade_scan 完全一致；
+ *               `grade->hits` / `hits_cap` 由调用方给（每个带可以不一样）。
+ *   · free   —— 销毁全部（可传 NULL，可在任意多个 band 之后调用）。
+ *
+ * ⚠️ 明细回放**不新建 ctx**：回放发生在 worker 全部 join 之后（单线程），
+ *    直接复用 ctx[0]（第一个 worker 的 ctx）。这是"threads=1 时全程恰好一次
+ *    lysh_search_ctx_init"这条硬要求的最后一环。
+ *
+ * 线程模型与 lysh_grade_scan 一致：threads == 1 在调用线程里内联跑；
+ * threads > 1 仍然"每带 spawn/join"，没有常驻线程池。
+ * ------------------------------------------------------------------ */
+typedef struct lysh_scan_session lysh_scan_session;
+
+lysh_scan_session *lysh_scan_session_open(uint64_t world_seed,
+                                          const lysh_phase1_opts *opts,
+                                          int max_height, int salt, int threads);
+void lysh_scan_session_free(lysh_scan_session *s);
+
+void lysh_scan_session_band(lysh_scan_session *s,
+                            int rx0, int rx1, int rz0, int rz1,
+                            int max_y, lysh_hut_grade *grade);
 
 #ifdef __cplusplus
 }

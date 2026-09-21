@@ -3,6 +3,9 @@
  * 这是什么：阶段 1 的多线程区域扫描 + 可选的阶段 2 收尾钩子。
  *   · 每个 worker 线程私有：一个 lysh_phase1、一个 lysh_scan_result（只有统计）；
  *     挂了阶段 2 钩子时再加一个 **lysh_search_ctx**（阶段 2 的全部预计算，惰性建）。
+ *     如果 `lysh_scan_opts.phase2_ctx_pool` 给了预建池（eval.c 的扫描会话就是这么用的），
+ *     worker 直接拿池里那一份，**不**自建也不销毁 —— 这样一个种子的噪声栈只初始化一次。
+ *     线程模型：nthreads == 1 时在调用线程里内联跑，不建线程；> 1 时每带 spawn/join。
  *   · 钩子是**每线程串行**调用的，但线程之间并发 —— 钩子只许写
  *     ctx->p2_slot 这一级别的每线程私有状态（见 search.h 的 phase2_ctx_init
  *     和 README §6.12）。跨线程共享的可写状态一律禁止。
@@ -116,7 +119,7 @@ typedef struct {
     int salt;
     int index;                  /* worker 下标（阶段 2 的每线程挂载点要用） */
     lysh_scan_result local;     /* 线程私有统计（免锁） */
-    lysh_search_ctx *ctx;       /* 线程私有：阶段 2 需要（惰性建） */
+    lysh_search_ctx *ctx;       /* 线程私有：阶段 2 需要（惰性建，或取自 phase2_ctx_pool） */
     int ctx_ok;
 } worker_t;
 
@@ -124,8 +127,22 @@ static void worker_run(void *arg) {
     worker_t *w = (worker_t *)arg;
     const lysh_scan_opts *o = w->o;
 
-    lysh_phase1 p1;
-    lysh_phase1_init(&p1, o->seed, &o->opts);
+    /* 阶段 1 状态：给了预建池（= eval.c 的扫描会话）就复用本 worker 那一份 ctx 的
+     * `p1` —— 它在 lysh_search_ctx_init 里已经初始化过了，所以一个种子在整个带循环里
+     * 只付一次阶段 1 噪声初始化（实测 66 us/次，256 带就是 17 ms，是修完之后剩下的
+     * 主要每带开销）。为什么复用是**逐位等价**的：
+     *   · lysh_phase1_init(seed, opts) 是确定性的，池里的 p1 与现建的一模一样；
+     *   · 扫描期只读 —— lysh_phase1_check_ex 的形参就是 `const lysh_phase1 *`
+     *     （phase1.h），编译期即保证不可能改写；
+     *   · 每个 worker 只碰 pool[index] 那一份，隔离性与"本线程局部变量"完全相同。
+     * 没有池时（CLI `lysh scan` 的第一遍等）保持老行为：本线程现建一份。 */
+    lysh_phase1 local_p1;
+    lysh_phase1 *p1 = &local_p1;
+    if (o->phase2_ctx_pool) {
+        p1 = &o->phase2_ctx_pool[w->index]->p1;
+    } else {
+        lysh_phase1_init(p1, o->seed, &o->opts);
+    }
 
     lysh_phase1_result r;
     for (int rz = w->rz0; rz < w->rz1; rz++) {
@@ -134,7 +151,7 @@ static void worker_run(void *arg) {
             int hut_x = pos.chunkX * 16;
             int hut_z = pos.chunkZ * 16;
 
-            int accept = lysh_phase1_check_ex(&p1, &o->opts, hut_x, hut_z, o->max_height,
+            int accept = lysh_phase1_check_ex(p1, &o->opts, hut_x, hut_z, o->max_height,
                                               &r, w->local.tier_hist);
 
             w->local.scanned++;
@@ -151,9 +168,15 @@ static void worker_run(void *arg) {
 
             /* ---- 阶段 2：每个幸存者过一遍评估钩子 ---- */
             if (!w->ctx_ok) {
-                w->ctx = (lysh_search_ctx *)calloc(1, sizeof(lysh_search_ctx));
+                if (o->phase2_ctx_pool) {
+                    /* 预建池（扫描会话）：worker 不自建、不销毁 —— 一个种子
+                     * 的噪声栈只在 lysh_scan_session_open 里初始化一次。 */
+                    w->ctx = o->phase2_ctx_pool[w->index];
+                } else {
+                    w->ctx = (lysh_search_ctx *)calloc(1, sizeof(lysh_search_ctx));
+                    if (w->ctx) lysh_search_ctx_init(w->ctx, o->seed, &o->opts, o->max_height);
+                }
                 if (w->ctx) {
-                    lysh_search_ctx_init(w->ctx, o->seed, &o->opts, o->max_height);
                     /* 钩子在这里挂上自己的**每线程**私有游标（无锁的关键） */
                     if (o->phase2_ctx_init) o->phase2_ctx_init(o->phase2_user, w->ctx, w->index);
                     w->ctx_ok = 1;
@@ -200,10 +223,18 @@ int lysh_scan_rect(const lysh_scan_opts *o,
         ws[t].index = t;
         ws[t].salt = o->salt ? o->salt : LYSH_SWAMP_HUT_SALT;
         lysh_scan_result_init(&ws[t].local);
-        if (thread_start(&ts[t], worker_run, &ws[t]) != 0) {
-            worker_run(&ws[t]);          /* 起不来就在本线程跑掉，保证结果正确 */
-        } else {
-            spawned[t] = 1;
+    }
+    if (nthreads == 1) {
+        /* 单线程：不建线程，直接在调用线程里跑完（扫描会话的 threads == 1 路径）。
+         * 这样"一个种子一次初始化"就是字面意义上的一次，且带循环里没有线程开销。 */
+        worker_run(&ws[0]);
+    } else {
+        for (int t = 0; t < nthreads; t++) {
+            if (thread_start(&ts[t], worker_run, &ws[t]) != 0) {
+                worker_run(&ws[t]);          /* 起不来就在本线程跑掉，保证结果正确 */
+            } else {
+                spawned[t] = 1;
+            }
         }
     }
     for (int t = 0; t < nthreads; t++) {
@@ -218,11 +249,11 @@ int lysh_scan_rect(const lysh_scan_opts *o,
         for (int i = 0; i < LYSH_TIER_MAX; i++) {
             res->tier_hist[i] += ws[t].local.tier_hist[i];
         }
-        if (ws[t].ctx) {                 /* 阶段 2 的线程私有 ctx */
+        if (ws[t].ctx && !o->phase2_ctx_pool) {   /* 阶段 2 的线程私有 ctx（池里的不归这里管） */
             lysh_search_ctx_free(ws[t].ctx);
             free(ws[t].ctx);
-            ws[t].ctx = NULL;
         }
+        ws[t].ctx = NULL;
     }
 
     res->seconds = (lysh_now_ms() - t_start) / 1000.0;

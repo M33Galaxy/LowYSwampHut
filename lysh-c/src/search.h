@@ -44,6 +44,16 @@ typedef struct {
                        int rx, int rz, int hut_x, int hut_z);
     void *phase2_user;
     void (*phase2_ctx_init)(void *user, lysh_search_ctx *ctx, int thread_index);
+
+    /* ---- 预建的 worker ctx 池（可选；唯一的使用者是 eval.c 的扫描会话）----
+     * 非 NULL 时长度为 `threads`：worker i 直接拿 pool[i]，**不**自己
+     * lysh_search_ctx_init、也**不**释放（生命周期由调用方 / 会话负责）。
+     * 它同时提供阶段 1 与阶段 2 的状态：worker 的阶段 1 检查直接用
+     * `pool[i]->p1`（扫描期只读，见 phase1.h），所以阶段 1 的噪声初始化也
+     * 一个种子只做一次。
+     * 这是"一个种子只初始化一次噪声栈"的关键：同一个池被多个带反复复用。
+     * 为 NULL 时保持老行为（每个 worker 惰性建阶段 2 ctx，阶段 1 现建）。 */
+    lysh_search_ctx **phase2_ctx_pool;
 } lysh_scan_opts;
 
 /* 扫描统计。**不含命中明细** —— 明细只有一条出口：阶段 2 的

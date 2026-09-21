@@ -14,10 +14,18 @@ import java.util.function.Consumer;
  * <p>本文件**没有任何地形 / 结构 / 气候判定**，全部由原生核心完成：
  * <ul>
  *   <li>阶段 1（女巫小屋候选粗筛）+ 阶段 2（footprint 平均高度 + 含水层灌满判定）由
- *       {@link NativePhase2#gradeScanNative} 一趟跑完 —— 与 CLI {@code lysh scan} 同一条 C 路径；</li>
+ *       {@link NativePhase2#scanOpen}/{@link NativePhase2#scanBand} 一趟跑完 —— 与 CLI
+ *       {@code lysh scan} 同一条 C 路径；</li>
  *   <li>Java 只做区域 Z 分带（决定进度刷新与"停止"的响应粒度）、把命中的候选格式化成
  *       {@code /tp x y z}、上报 {@link ProgressInfo}。</li>
  * </ul>
+ *
+ * <p><b>一个种子一个会话。</b>{@link NativePhase2#scanOpen} 把该种子的 worker 上下文
+ * （= 整条噪声栈）**只初始化一次**，{@link NativePhase2#scanBand} 每个 Z 带复用它，
+ * 最后在 {@code finally} 里 {@link NativePhase2#scanClose}。之前的写法是每带调一次
+ * {@code gradeScanNative}，于是每带都重建一次上下文（还要为明细回放再建一次）——
+ * 实测 256 带 / 65,536 格要 95.4 ms/种子，而纯计算只有 ~7.5 ms，成本完全被初始化吃掉。
+ * <b>MAX_SCAN_BANDS 仍然是 256</b>：带数现在不再有代价，而更细的带意味着更细的进度。</p>
  *
  * <p><b>进度模型：单一、单调、无阶段。</b>因为阶段 1 与阶段 2 是同一趟跑完的（单遍修复，
  * 见 {@code lysh-c/README.md} §7.4），两个阶段在时间上**不可分**，所以进度按"已扫完的
@@ -46,7 +54,12 @@ public class SearchCoords {
     /** 明细缓冲初始容量（条数）：阶段 1 幸存候选通常是个位数。 */
     private static final int INITIAL_HITS_SLOTS = 64;
 
-    /** 一次扫描最多分多少个 Z 带（带越小，进度越细、"停止"响应越快，但原生调用开销越高）。 */
+    /**
+     * 一次扫描最多分多少个 Z 带（带越小，进度越细、"停止"响应越快）。
+     *
+     * <p>带数**不再有原生调用开销**：每个种子只 scanOpen 一次，所有带复用同一批 ctx
+     * （见 {@link NativePhase2#scanOpen}）。所以这里保持 256，取更细的进度。
+     */
     private static final int MAX_SCAN_BANDS = 256;
 
     private static final int MAX_SEARCH_AXIS_SPAN =
@@ -207,6 +220,9 @@ public class SearchCoords {
         long evaluatedTotal = 0;
         // 扫过的 region 数（= 进度分子）。循环里逐带累加，正常跑完必然等于 currentTotalTasks。
         long scannedTotal = 0;
+        // 本次搜索的 C 会话句柄（0 = 还没开）。关闭放在 finally，保证"停止"提前 return
+        // 与异常路径都不会泄漏 worker ctx。
+        long scanSession = 0;
         // true = 这次搜索"有结论"（成功或明确失败）。只有用户主动停止才为 false ——
         // 用户停掉时不再补发"完成"信号，否则会把刚停掉的界面又"解锁"成完成态。
         boolean terminal = false;
@@ -230,37 +246,56 @@ public class SearchCoords {
             int bandZ = Math.max(1, (totalZ + bands - 1) / bands);
             long scanned = 0;
 
-            for (int z = minZ; z < maxZ; z += bandZ) {
-                waitIfPaused();
-                if (!isRunning) {
-                    return;
-                }
-                int zEnd = Math.min(maxZ, z + bandZ);
-                long[] stats = gradeScan(seed, phase1Height, maxY, threadCount, minX, maxX, z, zEnd, outHits);
-                if (stats[7] < 0) {
-                    // 明细缓冲不够（C 侧约定 capacityNeeded == -1 且 hitsWritten == 0）：按需求容量重来这一带。
-                    long needed = Math.max(intsPerHit, stats[3] * (long) intsPerHit);
-                    outHits = new int[(int) Math.min(Integer.MAX_VALUE, needed)];
-                    stats = gradeScan(seed, phase1Height, maxY, threadCount, minX, maxX, z, zEnd, outHits);
-                }
-
-                int written = (int) stats[6];
-                for (int i = 0; i < written; i++) {
-                    int base = i * intsPerHit;
-                    if (outHits[base + NativePhase2.F_OK] == 0) {
-                        continue;
+            // ⚡ 一个种子**一个**会话：worker ctx（整条噪声栈）只在这里初始化一次，
+            // 下面的循环无论切多少带都复用它（明细回放也不再新建 ctx）。
+            scanSession = openScan(seed, phase1Height, threadCount);
+            if (scanSession == 0) {
+                throw new IllegalStateException(
+                        "NativePhase2.scanOpen returned 0 (out of memory or invalid arguments)");
+            }
+            try {
+                for (int z = minZ; z < maxZ; z += bandZ) {
+                    waitIfPaused();
+                    if (!isRunning) {
+                        return;
                     }
-                    emitResultLine(new Result(
-                            outHits[base + NativePhase2.F_HUT_X],
-                            outHits[base + NativePhase2.F_HUT_Z],
-                            outHits[base + NativePhase2.F_AVG_Y]).toString(), resultCallback);
-                }
+                    int zEnd = Math.min(maxZ, z + bandZ);
+                    long[] stats = NativePhase2.scanBand(scanSession, minX, maxX, z, zEnd, maxY, outHits);
+                    if (stats == null) {
+                        throw new IllegalStateException("NativePhase2.scanBand returned null (bad handle)");
+                    }
+                    if (stats[7] < 0) {
+                        // 明细缓冲不够（C 侧约定 capacityNeeded == -1 且 hitsWritten == 0）：按需求容量重来这一带。
+                        long needed = Math.max(intsPerHit, stats[3] * (long) intsPerHit);
+                        outHits = new int[(int) Math.min(Integer.MAX_VALUE, needed)];
+                        stats = NativePhase2.scanBand(scanSession, minX, maxX, z, zEnd, maxY, outHits);
+                        if (stats == null) {
+                            throw new IllegalStateException("NativePhase2.scanBand returned null (bad handle)");
+                        }
+                    }
 
-                scanned += stats[0];
-                scannedTotal = scanned;
-                acceptedTotal += stats[1];
-                evaluatedTotal += stats[2];
-                processedCount.set(scanned);
+                    int written = (int) stats[6];
+                    for (int i = 0; i < written; i++) {
+                        int base = i * intsPerHit;
+                        if (outHits[base + NativePhase2.F_OK] == 0) {
+                            continue;
+                        }
+                        emitResultLine(new Result(
+                                outHits[base + NativePhase2.F_HUT_X],
+                                outHits[base + NativePhase2.F_HUT_Z],
+                                outHits[base + NativePhase2.F_AVG_Y]).toString(), resultCallback);
+                    }
+
+                    scanned += stats[0];
+                    scannedTotal = scanned;
+                    acceptedTotal += stats[1];
+                    evaluatedTotal += stats[2];
+                    processedCount.set(scanned);
+                }
+            } finally {
+                // 提前 return（用户按了停止）与异常路径都会走到这里。
+                NativePhase2.scanClose(scanSession);
+                scanSession = 0;
             }
 
             PHASE1_LAST_CANDIDATES.set((int) Math.min(Integer.MAX_VALUE, acceptedTotal));
@@ -272,6 +307,12 @@ public class SearchCoords {
             t.printStackTrace();
             terminal = true;
         } finally {
+            if (scanSession != 0) {
+                // 兜底：正常路径已在上面关掉（并清零），这里只覆盖"开完会话后、
+                // 进带循环前"抛异常这类极端情况。
+                NativePhase2.scanClose(scanSession);
+                scanSession = 0;
+            }
             coordinatorFinished = true;
             if (progressThread != null) {
                 progressThread.interrupt();
@@ -294,10 +335,15 @@ public class SearchCoords {
         }
     }
 
-    /** 一次区域扫描：{@code gradeScanNative} 一趟给出阶段 1 统计 + 通过的候选明细。 */
-    private long[] gradeScan(long seed, int phase1Height, int maxY, int threads,
-                             int rx0, int rx1, int rz0, int rz1, int[] outHits) {
-        return NativePhase2.gradeScanNative(
+    /**
+     * 开一个扫描会话（{@link NativePhase2#scanOpen}）：整个种子的 worker ctx 只建这一次。
+     *
+     * <p>由 {@link #runNativeScan} 在带循环之前调用，返回的句柄在每个带上复用
+     * （{@link NativePhase2#scanBand}），并在 {@code finally} 里关掉。
+     * salt 固定传 0 → 内核默认的 1.13+ 女巫小屋 salt。
+     */
+    private long openScan(long seed, int phase1Height, int threads) {
+        return NativePhase2.scanOpen(
                 seed,
                 gameVersion == GameVersion.V1_18_2 ? 1 : 0,
                 worldPresetMode == WorldPresetMode.SINGLE_BIOME ? 1 : 0,
@@ -305,10 +351,7 @@ public class SearchCoords {
                 worldPresetMode == WorldPresetMode.LARGE_BIOMES ? 1 : 0,
                 phase1Height,
                 0, // salt = 0 → 内核默认的 1.13+ 女巫小屋 salt
-                threads,
-                rx0, rx1, rz0, rz1,
-                maxY,
-                outHits);
+                threads);
     }
 
     private void failSearch(String message, Consumer<String> resultCallback) {
