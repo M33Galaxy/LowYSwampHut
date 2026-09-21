@@ -78,6 +78,7 @@ add_library(lysh_core STATIC
   src/density.c
   src/interp_noise.c
   src/aquifer.c
+  src/carver.c
   src/phase2.c
   src/eval.c
   src/search.c

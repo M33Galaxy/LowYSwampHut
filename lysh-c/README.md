@@ -1,4 +1,4 @@
-# lysh — LowYSwampHut 的 C 内核 技术文档
+﻿# lysh — LowYSwampHut 的 C 内核 技术文档
 
 > **版本：2.0.0**（C 内核与 Java 产品同号；`lysh --help` 的 banner、`NativePhase1/2.coreVersion()` 均报 `lysh 2.0.0`）。
 > **默认 Minecraft 版本：26.2**（不写 `--version` 就是 26.2，见 §0.0）。
@@ -45,7 +45,7 @@ L6 高度图的**1.18 路线全部 ⛔ 默认无效**，仅在 `1.18.2` 分支�
 | 0a | Xoroshiro128++ / deriver / nextInt / nextDouble / MD5 | 通用 | 参考向量逐位对拍 | ✅ **48/48** |
 | 0b | Perlin / OctavePerlin / DoublePerlin 求值 | 通用 | Java dump 对拍 | ✅ **100000/100000** |
 | 0c | 噪声参数表（name/firstOctave/amplitudes/lacunarity/persistence） | 通用 | 表一致性（含漂移检查） | ✅ 已 dump |
-| 1b | 女巫小屋区域放置（spacing/separation/salt + LCG） | 通用 | setRegionSeed / getInRegion / setCarverSeed | ✅ **6000/6000** |
+| 1b | 女巫小屋区域放置（spacing/separation/salt + LCG） | 通用 | setRegionSeed / getInRegion / setLargeFeatureSeed | ✅ **6000/6000** |
 | 2 | **阶段 1 完整 `check()`**（气候门 + 洞穴梯子 + 大陆性 + floodedness） | 通用（复现现有 Java 程序） | 逐格 × 38 个原始 double **逐位** + 最终判定 | ✅ **594,064 格 / 22.6M 值 / 0 差异** |
 | 2b | **阶段 1 全图扫描 CLI + 多线程** | 通用 | 6M 格 A/B 命中集合完全相同 | ✅ 全图 1.373e10 格 / 4,047 幸存 |
 | 2c | **JNI 桥**（`lysh.dll` → `project.NativePhase1`） | 通用 | Java/C 命中集合逐个比对 | ✅ 1 线程 1.43× / 8 线程 5.71× |
@@ -53,6 +53,7 @@ L6 高度图的**1.18 路线全部 ⛔ 默认无效**，仅在 `1.18.2` 分支�
 | 1 / 3 / 3a–3d | 每 octave 状态派生 / `sampleNoiseColumn` / 样条树 / `TerrainNoisePoint` / `InterpolatedNoiseSampler` | ⛔ **1.18** | 796/796、20,000 点逐位、40 octave + 20,000 值逐位 | ✅ 但**仅 1.18.2 分支**；规格已作废 |
 | 4 | 含水层（**26.1.2** `Aquifer$NoiseBasedAquifer`） | 通用 | `computeFluid` / `computeSubstance` 各 30000 点逐位 | ✅ GREEN |
 | 5 | `getBaseHeight(MOTION_BLOCKING_NO_LEAVES)`（26.1.2 `interpolated`） | 通用 | footprint 平均高度逐候选比较 | ✅ **11/11 + 1681/1681**，平均绝对差 0.00 格 |
+| 5b | **雕刻层**（`carver.c`：Cave + Canyon，挖进 footprint 会改列顶） | 通用 | 逐列对拍真实生成器 | ✅ 最差列差 0 |
 | 6 | 精确生成校验（真游戏 / 无头服务端） | 通用 | — | ⏳ 未实现 |
 
 > **一句话**：默认有效的是 0a/0b/0c/1b/2/2b/2c + 26.1.2 的 L4/L5/L6；所有 `⛔ 1.18` 行只在显式选
@@ -86,32 +87,53 @@ box.move(0, heightPosition - box.minY(), 0);
 > 与 1.18 的一处**实质差异**：1.18 走 `getTopPosition`（**不含下半格**），26.1.2 走
 > `getHeightmapPos`（**含下半格**）。对高度图类型无影响，但它是“按 1.18 写会差 1 格”的一个来源。
 
-**朝向配方的展开**（唯一给出 11/11 的配方；别用 `lysh_set_carver_seed`，`setCarverSeed` 在
-26.1.2 已被删除，也别用 `nextFloat()` 启发式）：`setSeed(seed)` → `a = nextLong(); b = nextLong()`
-→ `setSeed((chunkX*a) ^ (chunkZ*b) ^ seed)`，只用 `lysh_lcg` 现有原语即可。端到端核对：11 个已知
-小屋的朝向与 `avg_y` 全部相符（逐点表见 §4.2）。
+**朝向配方的展开**（别用 `nextFloat()` 启发式）：`setSeed(seed)` → `a = nextLong(); b = nextLong()`
+→ `setSeed((chunkX*a) ^ (chunkZ*b) ^ seed)`，只用 `lysh_lcg` 现有原语即可。
+⚠️ `nextLong()` 是 `((long)next(32) << 32) + next(32)`，**第二个 `next(32)` 是符号扩展**
+（`i2l`），不是零扩展拼接；写成拼接会让约一半的种子差 2^32。该值同时决定朝向与 carver 播种。
+端到端核对：11 个已知小屋的朝向与 `avg_y` 全部相符（逐点表见 §4.2）。
 
 ### 2.5.4 footprint 平均高度的取整口径（**纠错后**）
 
 `avg_y` 是 **`sum / 63`，整数除法，向零截断**（`src/eval.c`）。这不是“为了对齐谁”而做的选择：
 **它就是 Minecraft 的整数除法语义**，也是 26.1.2 oracle `updateAverageGroundHeight` 里那一行
-`sum / n` 的字面翻译。文档旧版曾说“Java 产品的 `ceil(sum/63 + 1)` 是错的 / 与 oracle 差 1 /
-匹配 0/11”—— **那段结论是错的，已删除**。正确关系：Java 每列的 `sum_block` 是**方块 Y**，
-而 `getBaseHeight(...).getY()` 返回 **方块 Y + 1**，所以 `ceil(sum_block/63 + 1)` 与 C 的
-`trunc(sum_base/63)` **描述的是同一个量**；在**负 Y 段**，`ceil` 与向零截断**恒等** ⇒
-**Java 老路径没有 off-by-one bug**。需要复现 Java 产品 `/tp` 行口径时用 `lysh_hut_grade()`
-的 `tp_y` 字段。**顺带确认**：高度图类型不敏感（`MOTION_BLOCKING_NO_LEAVES` 与
-`WORLD_SURFACE_WG` 在 11 个点逐个相等）；`getBaseHeight` 走
-`NoiseChunk.getInterpolatedState()`（完整路径，含洞穴与含水层），**不是**
-`preliminarySurfaceLevel`（后者只用于含水层的**邻近列顶**探测）—— 之前一度误判，已纠正。
+`sum / n` 的字面翻译。Java 每列的 `sum_block` 是**方块 Y**，而 `getBaseHeight(...).getY()`
+返回 **方块 Y + 1**，所以 `ceil(sum_block/63 + 1)` 与 C 的 `trunc(sum_base/63)` **描述的是
+同一个量**；在**负 Y 段**，`ceil` 与向零截断**恒等** ⇒ **Java 老路径没有 off-by-one bug**。
+需要复现 Java 产品 `/tp` 行口径时用 `lysh_hut_grade()` 的 `tp_y` 字段。
 
-## 2.6 ⭐⭐ 真实群系门（`src/biome.c`）——4 个假阳性就是它
+### 2.5.5 雕刻层（`src/carver.c`）—— 小屋 Y 必须算在挖之后
+
+`ScatteredFeaturePiece.updateAverageGroundHeight` 读的是 **`LevelAccessor.getHeightmapPos`**
+（活的世界），调用点在 `SwampHutPiece.postProcess` = **FEATURES 阶段**，而 carver 在更早的
+**CARVERS 阶段**；FEATURES 开头的 `primeHeightmaps` 会从实时方块**重扫**高度图。
+⇒ **小屋 Y 是挖过之后的列顶**，只算密度 + 含水层（挖前）会偏高，凡 footprint 有地表洞穴口
+的候选都会被算高。`carver.c` 复刻 `NoiseBasedChunkGenerator.applyCarvers`：
+
+- 17×17 origin 区块（硬编码 −8..8，dx 外 dz 内）× 该 origin 群系的 carver 列表
+  （`swamp` = `cave` / `cave_extra_underground` / `canyon`，概率 **0.15 / 0.07 / 0.01**）。
+- 播种 `setLargeFeatureSeed(worldSeed + carverIndex, origin.x, origin.z)`。
+  ⚠️ **`setCarverSeed` 在 26.1.2 不存在，且任何版本都没有 `|1L`**；1.18.2~26.1.2 的这个函数
+  逐指令相同 ⇒ **播种与版本无关**。配置值对 1.20+ 逐字段相同；**1.18.2 / 1.19.2 的
+  `configured_carver` 本地无法验证**，目前沿用 26.1.2 的配置。
+- 一张 `CarvingMask` 跨全部 289 个 origin 共享，位下标 `(x&15)|((z&15)<<4)|((y-minY)<<8)`。
+- 挖出的方块：`y <= minGenY+8`（=−56）写岩浆，否则查 `Aquifer.computeSubstance(x,y,z, 0.0)`
+  （**密度实参是 0.0**），返回空则**不写**。overworld 不写 `CAVE_AIR`。
+- **邻居 origin 的雕刻会写进 target**（夹取到重叠区）——`carveEllipsoid` 没有 `ChunkPos` 参数，
+  夹取基准是写入对象。所以 17×17 是**正确性必需**，不是只为 mask 副作用。
+- 高度图**不要增量维护**：`Heightmap.update` 只会抬高列。算完雕刻后**重新自上而下扫**即可。
+- `src/sin_table.h` 是 `Mth.SIN`（65536 项）的 dump，由 JVM 生成 ⇒ **依 JVM / 平台而异**，
+  vanilla 自己那张表同理。改隧道形状的代码时应以本机游戏为准重验。
+- 灌水判定与雕刻无关（采样平面在海平面附近，远高于 footprint 地表）⇒ 可先判灌水，
+  已灌满的直接拒并**跳过雕刻层**（见 `eval.c` 的 guard，阈值 64）。**Y 门不可用于跳过**：
+  雕刻只会**降低**列顶，挖前超门槛的候选挖后可能合格。
+
+## 2.6 ⭐⭐ 真实群系门（`src/biome.c`）
 
 阶段 1 的气候门只是**旧 Java 程序 `SearchCoords.check()` 的近似**（四个气候阈值 + 洞穴梯子），
-**不是** MC 的真实群系判定；原来补这一刀的 `findGeneratedHutFloorY` 随 Java 老路径删除后，就没有
-任何东西能拒掉“气候阈值全过、但群系不是沼泽”的候选 —— 症状就是全图报出 **4 个假阳性**
-（`/tp 17232544 -51 -9173744`、`/tp 11390480 -51 18688624`、`/tp 17842032 -41 23387872`、
-`/tp -25413600 -43 27291472`；它们的阶段 2 完全正常，缺的是**上游**那一门）。
+**不是** MC 的真实群系判定；原来补这一刀的 `findGeneratedHutFloorY` 随 Java 老路径删除后，
+就没有任何东西能拒掉“气候阈值全过、但群系不是沼泽”的候选 —— 症状是全图报出**少量假阳性**
+（它们的阶段 2 完全正常，缺的是**上游**那一门）。
 
 **做了什么**：实现 MC 真正决定小屋能不能放的那一步 —— `Structure.isValidBiome`（26.1.2 字节码）：
 
@@ -161,26 +183,7 @@ lysh-c/  CMakeLists.txt → 三个目标：lysh_core / lysh / lysh_jni（**无�
         eval.c/.h(⭐ 产品入口：朝向 + footprint 精确平均高度 + 灌水判定 + 门槛)
         jni_bridge.c main.c(CLI) aquifer.c density.c column_top.c interp_noise.c spline.c/.h
         terrain.c/.h phase2.c(interpolated 三线性插值 + 含水层 + 高度)
-        ※ noise_table.h / terrain_table.h 的生成器（NoiseTable.java / TerrainTable.java）只在归档 zip 里
-  build/  构建产物（不入版本库）
-仓库根：_archive/verify_tools_20260921.zip（已删除 tools/ 的 50 文件全量归档，**reference-only**）
-        _archive/dev_scratch_20260921.zip（开发期 dump / 反汇编 / cp.txt / projclasses / mcdata…）
-        _archive/dev_scratch2_20260921.zip（vendored cubiomes + 三个版本快照 `v1/v2/v3`）
-        _archive/probe_20260921.zip（26.1.2 oracle 探针 `probe/*.java`）
-        LowYSwampHut-main/（Java GUI / CLI 产品，阶段 1、2 走 C，见 §4.7）
 ```
-
-> `tools/`、`probe/` 里的 oracle 探针（`HutPieceProbe` / `HutDirLab` / `AquiferDump` /
-> `DenColProbe261` 等）依赖开发机上那套 26.1.2 服务端 + 依赖的 classpath，属**开发期工具**，
-> 已删除；上面 4 个 zip 就是全量归档。
->
-> ⚠️ **`verify_tools_20260921.zip` 只是参考资料，不再是恢复路径。** 它依赖的一批 archive-only
-> API（14 个符号，含 `lysh_phase1_check` / `lysh_phase2_density_parts` /
-> `lysh_interp_calculate_noise(_ex)` / `lysh_swamp_hut_salt` / `LYSH_P1_PROBE_NAMES` /
-> `lysh_phase1_result.reject_y` 等）已于 **2026-09-21** 删除（见 §8）。
-> 归档里的 28 个 `.c` 因此**不再能对当前 `src/*.h` 编译** —— 工具源码与 methodology 仍可阅读，
-> 但想重跑必须自己按现在的头文件改接口。`NoiseTable.java` / `TerrainTable.java` 两个生成器
-> 的内容仍然有效（照它们的做法重写即可）。
 
 ## 4. 构建与运行
 
@@ -214,6 +217,31 @@ Copy-Item lysh-c\build\mingw\lysh.exe,lysh-c\build\mingw\lysh.dll lysh-c\build\c
 在 MSYS2 UCRT64 上验证）、CMake 3.16+、JDK 22（JNI 目标需要 `JAVA_HOME` 指向 JDK；
 找不到 `jni.h` 时自动跳过并打印 `lysh: JNI bridge skipped`，不影响另外两个目标）。
 
+### 4.2 ⭐ 唯一回归网：11 个已知低 Y 小屋
+
+`tools/` 删掉后**只剩三样信号**：① `[engine]` / `[funnel]` 诊断数字不漂；
+② **本表的 Y 与 dir**；③ Java 产品端到端的 `[funnel]` 行。改 `src/` 里任何东西之后都要跑：
+
+```powershell
+lysh.exe hut --seed -143551518615525778 --x <hutX> --z <hutZ> --version 26.2
+```
+
+**Y 与 dir 必须一字不变**（Y 变 = 行为变，dir 变 = 播种变；footprint 形状由 dir 的奇偶决定，
+所以**只看 Y 会漏掉 dir 值错而奇偶相同的情形**）。
+
+| # | hutX | hutZ | Y | dir | 形状 | # | hutX | hutZ | Y | dir | 形状 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | -18740992 | -18206128 | **-54** | 1 | 9×7 | 7 | -27133216 | 20324032 | **-46** | 2 | 7×9 |
+| 2 | 15008 | -2784 | **-54** | 1 | 9×7 | 8 | 29190240 | -12559360 | **-53** | 2 | 7×9 |
+| 3 | 7652592 | -26905808 | **-43** | 3 | 9×7 | 9 | 14535024 | -18059072 | **-47** | 2 | 7×9 |
+| 4 | -12547840 | 13669712 | **-43** | 0 | 7×9 | 10 | -13654720 | -21911344 | **-53** | 3 | 9×7 |
+| 5 | 8248000 | 17264960 | **-44** | 2 | 7×9 | 11 | -18756416 | 6244480 | **-43** | 3 | 9×7 |
+| 6 | 12008512 | -681920 | **-47** | 1 | 9×7 | | | | | | |
+
+这个种子同时是**群系门的验收点**：全图扫描必须**无假阳性**（气候门全过但群系不是沼泽的候选
+一律 `REJECT reason=biome`）。**没有更重的验证手段了** —— `_archive\verify_tools_20260921.zip`
+里的对拍工具已**不能对当前头文件编译**（见 §3），要复用只能自己按现在的接口改。
+
 ### 4.3 CLI（`lysh`）
 
 ```powershell
@@ -237,13 +265,15 @@ lysh.exe hut  --seed <long> --x <hutX> --z <hutZ> [--max-y M] [--phase2-max-y Y]
 
 **`lysh scan` 就是完整流水线**：`lysh_scan_rect`（阶段 1，只收 funnel 统计）→
 `lysh_grade_scan`（阶段 1 + 每幸存者 `lysh_eval_hut`，并在单线程里回放明细）。CLI、JNI、GUI
-**走同一条 C 代码路径**，没有第二份判定。**单候选**：
+**走同一条 C 代码路径**，没有第二份判定。**单候选**输出形如：
 
 ```
-> lysh.exe hut --seed -143551518615525778 --x -18740992 --z -18206128
-  orientation : dir=1  footprint 9(x) x 7(z)          footprint : sum(h)=-3402 / 63 -> avg_y = -54
-  aquifer     : 0/63 columns flooded at y=62 -> all dry       verdict : ACCEPT (avg_y -54 <= -40)
-  /tp -18740992 -54 -18206128
+> lysh.exe hut --seed <seed> --x <hutX> --z <hutZ>
+  orientation : dir=<0-3>  footprint <7x9 或 9x7>
+  footprint   : sum(h)=<sum> / 63 -> avg_y = <Y>
+  aquifer     : <n>/63 columns flooded at y=62 -> all dry
+  verdict     : ACCEPT (avg_y <= max-y) 或 REJECT reason=...
+  /tp <hutX> <Y> <hutZ>
 ```
 
 **`--list` 格式（唯一一种）**：`hit <rx> <rz> <x> <y> <z> <flooded>`；`x z` = 小屋原点方块坐标，
@@ -253,15 +283,8 @@ footprint 在 y=62 被水灌满 —— 这类候选在阶段 2 一律被拒，�
 也不同（六列 `rx = hutX/32`，四元组 `rx` 是扫描区域下标 `hutX/512`）；依赖旧格式的脚本必须改，
 **没有**“逐字节兼容旧格式”的退路了。
 
-**真实输出片段**（`--rx0 -5000 --rx1 5000 --rz0 -5000 --rz1 5000`，100M 格；唯一通过的候选正好是
-11 个已知低 Y 小屋里的 #2 `(15008, -2784)`，Y = -54 —— 阶段 1 是近似路径，一个小屋被扫到就已经是
-100M 格里的最好结果；`elapsed` / `throughput` 是本机 8 线程一次运行的读数，抖动 ±5%）：
-
-```
-  scanned : 100000000    elapsed : 2.344 s (23.4 ns/cell)    throughput : 42.66 M cells/s
-  phase-1 survivors: 31      phase 2: evaluated 31 / accepted 1 / reject avg_y 30 / reject flood 0
-  phase-2 cpu 0.467 s total across 8 thread(s) = 15.06 ms/candidate      hit 469 -87 15008 -54 -2784 0
-```
+`scan` 的稳定摘要行（`scanned` / 幸存数 / 阶段 2 各计数 / erosion 档位直方图）是**改内核后的
+必看项**：数字漂了就说明行为变了。`elapsed` / `throughput` 只是本机读数，抖动 ±5%，不作判据。
 
 ### 4.4 从 Java 调 C（JNI 桥）
 
@@ -400,19 +423,10 @@ java -jar dist\LowYSwampHut.jar `
 
 #### 4.7.2 端到端验收：11 个已知小屋，Y 全部来自 C 阶段 2
 
-`Launcher` 的 CLI 模式不需要显示器。对 §4.2 表里 11 个已知小屋各跑一次
+`Launcher` 的 CLI 模式不需要显示器。对 **§4.2 表**里 11 个已知小屋各跑一次
 （`--min-x/--max-x/--min-z/--max-z` 是**区域号**），期望与实得**全部 11/11 逐字相同**
-（11.3 s，11 次独立 JVM 启动；每个 funnel = `1/1/1`）：
+（约 11 s，11 次独立 JVM 启动；每个 funnel = `1/1/1`）。判据就是 §4.2 表的 Y 与 dir。
 
-```
-  1 /tp -18740992 -54 -18206128      5 /tp 8248000 -44 17264960      9 /tp 14535024 -47 -18059072
-  2 /tp 15008 -54 -2784              6 /tp 12008512 -47 -681920     10 /tp -13654720 -53 -21911344
-  3 /tp 7652592 -43 -26905808        7 /tp -27133216 -46 20324032   11 /tp -18756416 -43 6244480
-  4 /tp -12547840 -43 13669712       8 /tp 29190240 -53 -12559360
-```
-
-> 另外两条对照（Java 老路径的输出、`-Dlowyswamphut.phase2CGenCheck=true`）是**历史记录，
-> 今天已不可复现**：那套代码随 SeedChecker 一起删除。今天
 > `-Dlowyswamphut.nativePhase2=false` 只会得到 `[engine] native phase 2: OFF (...)` 并**拒绝搜索**
 > （“原生内核不可用”），不会有任何结果行；`x` 后缀标记也已彻底不存在。
 
@@ -472,7 +486,7 @@ Java 找不到”。② **阶段 1→2 的 density 预筛在 C 阶段 2 下默�
 28. **绿色测试在你看过它变红之前没有意义**：每加一层对拍都要做一次负向对照。
 29. **性能改动也是“实现改动”**：只有重跑逐位对拍（0 差异）才能证明等价。
 30. **分支的影响范围要算清楚**：`clampedLerp(g/512,h/512,t)` 在 `t >= 1` 恒返回 `h/512`、`t <= 0` 恒返回 `g/512` ⇒ `skip_lower` 在 `t>=1`、`skip_upper` 在 `t<=0` 时**必然**无影响 —— “改坏了还是绿的”可能是测试无效，也可能是分支数学上无关。
-31. **别猜 RNG 配方 —— 把真值抓出来当标签。** `setCarverSeed` 在 26.1.2 已删除；仿射/区域级 `nextInt(4)` 是错的。**9/11 这种分数最危险**（高到让你以为只差一个边界）。正确配方见 §2.5。
+31. **别猜 RNG 配方 —— 把真值抓出来当标签。** 仿射/区域级 `nextInt(4)` 是错的；`setCarverSeed` 这个函数在 26.1.2 **不存在**，也没有任何 `|1L`。**9/11 这种分数最危险**（高到让你以为只差一个边界）。正确配方见 §2.5。
 32. **“两种形状”不是“两个方向”，而是“两个轴”**：`axisZ = (dir==0||dir==2)` ⇒ **命中集合呈现结构性配对（`{N,S}`/`{E,W}`）说明参数空间维度选错了。**
 33. 负向对照脚本的“恢复”必须 `finally` 且无条件：每个用例**先无条件恢复再改**，`finally` 再恢复，最后用**哈希**对账；否则一次中断污染后续全部基线。
 34. PS 5.1 读**无 BOM** 的 `.ps1` 会把中文注释后的行首命令整行吃掉 ⇒ 带中文注释的 UTF-8 脚本**必须带 BOM** 或纯 ASCII（现只剩 `build-dist.ps1`）。
@@ -560,8 +574,8 @@ sub-sampler 的非空槽位一一对应”的噪声成立**（erosion 满足：�
 
 ### 7.3 全流水线（阶段 1 + 阶段 2）—— **整节是外推**
 
-阶段 2 单候选：warm **8.42 ms/candidate**（63 列 `lysh_phase2_height` 88% + 含水层 12%），
-每候选重建 ctx 只多 ~0.43 ms；`lysh scan` 内 8 线程实测 13~16 ms/candidate（缓存局部性差）。
+阶段 2 单候选（63 列 footprint）：**约 5~8 ms**。其中**雕刻层约 2~3 ms**（含灌水短路时不付），
+其余是 63 列 `lysh_phase2_height` + 含水层。`lysh scan` 内 8 线程实测约 7~9 ms/candidate。
 
 > ⚠️ **下表整张都是外推，不是全图实测。** 唯一直接测过的“全图时间”是**精确路径的 20.8 min**
 > （6 线程，1.373e10 格，4,047 幸存）。分层提前退出上线后**没有重跑过全图**：阶段 1 是“实测吞吐
@@ -571,8 +585,8 @@ sub-sampler 的非空槽位一一对应”的噪声成立**（erosion 满足：�
 | 阶段 | 依据 | 时间 |
 |---|---|---|
 | 阶段 1（全图 1.373e10 格） | 6 线程实测吞吐 36.60 M 格/s ⇒ 1.373e10 / 36.60e6 | ≈ **375 s ≈ 6.25 min** |
-| 阶段 2（4,047 幸存，实测幸存数） | 4047 × 8.42 ms ÷ 6 线程 | ≈ **5.7 s**（占 ~1.5%） |
-| **全流水线（按实测幸存数）** | 375 s + 5.7 s | ≈ **6.3 min** |
+| 阶段 2（4,047 幸存，实测幸存数） | 4047 × 7 ms ÷ 6 线程 | ≈ **4.7 s**（占 ~1.2%） |
+| **全流水线（按实测幸存数）** | 375 s + 4.7 s | ≈ **6.3 min** |
 
 ### 7.4 ⭐ Java 路径的重复阶段 1（**已修**，P2 的根因）
 
@@ -596,15 +610,18 @@ sub-sampler 的非空槽位一一对应”的噪声成立**（erosion 满足：�
 **已完成**：噪声派生（0a/0b/0c）· 结构放置（1b）· **阶段 1 完整 `check()`（含真实群系门）** ·
 阶段 1 全图扫描（1.373e10 格 / 4,047 幸存）· JNI 桥 · **阶段 2 接进 C 核心**（`lysh scan` 默认
 全流水线 + `lysh hut` + `lysh_eval_hut` + JNI `NativePhase2`）—— 26.1.2 的 L4 `BlendedNoise` /
-L5 含水层 / L6 `interpolated` 的 footprint 平均高度与 oracle 相等（11/11 + 1681/1681）。
+L5 含水层 / L6 `interpolated` 的 footprint 平均高度与 oracle 相等（11/11 + 1681/1681）·
+**雕刻层**（`carver.c`，见 §2.5.5）。
 **未做**：**M4 精确生成校验**（真游戏 / 无头服务端；Java 侧老路径的 `findGeneratedHutFloorY`
 已删除，C 里没有对应实现）· **M5 1.21.1 的 JSON 解释器**（现在参数是硬编码/传入的）·
 **M6 GUI 打包**。
 
 **⚠️ 正确性的边界（必须知道）**：产品不再产出 `×`（“无法生成”），也**没有任何产品内交叉校验**
 （老 Java 路径的真生成标记随回退路径一起删除）。因此**正确性完全押在“各道门是完备的”之上** ——
-阶段 1 阈值 + 精确 footprint 高度 + 含水层灌水判定 + 精确群系门。若仍有某个放置条件未被建模，
-症状会是**一个假阳性，且没有任何预警**。
+阶段 1 阈值 + 精确 footprint 高度 + 含水层灌水判定 + 精确群系门 + 雕刻层。若仍有某个放置条件
+未被建模，症状会是**一个假阳性，且没有任何预警**。**雕刻层有两处已知近似**：`topMaterial`
+（`SurfaceSystem` 的草/菌丝）未建模；SURFACE 之后的方块**类型**按“阻挡移动”近似（依据是这些
+深度上地表规则的产出都在 `#overworld_carver_replaceables` 里，仅经逐列对拍间接验证）。
 
 **⚠️ R1（最要紧的一条，不许删）**：`phase1.c` `climate_path()` 里的
 
@@ -621,11 +638,9 @@ erosion 门就静默全通过。** 已用离线测试验证：把 `erosion_tier_
 淘汰 20 格里的 11 格，且与 tier 路径**逐格判定完全一致**。
 
 **改内核时的必跑项**（没有更重的验证手段）：① `[engine]` / `[funnel]` 诊断数字不漂；
-② 和之前跑过的种子的结果对比，**Y 与 dir 一字不变**；③ Java 产品端到端的 `[funnel]` 行。
-**本期的回归结果**：`cmake --build` **exit 0 / 零警告**；横幅 `lysh 2.0.0`、默认 `version : 26.2`；
-`lysh hut --seed -143551518615525778 --x 12008512 --z -681920 --version 26.2` →
-`avg_y = -47` / `/tp 12008512 -47 -681920` / `ACCEPT`；11 个已知小屋抽查全部 ACCEPT 且 Y 不变；
-4 个假阳性仍 `REJECT reason=biome`。
+② §4.2 表里 11 个小屋的 **Y 与 dir 一字不变**（Y 对不上是行为变，dir 对不上是播种变）；
+③ Java 产品端到端的 `[funnel]` 行。**本期的回归结果**：`cmake --build` **exit 0 / 零警告**；
+11 个已知小屋全部 ACCEPT 且 Y 与 dir 相符；`scan` 100M 格的档位直方图与 erosion 门计数不变。
 
 **一个容易记错的事实**： Java 产品的 `ceil(sum/63 + 1)` **没有
 off-by-one**：Java 每列的值是**方块 Y**（= `getBaseHeight` 返回值 − 1），与 C 的

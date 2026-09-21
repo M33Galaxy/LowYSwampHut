@@ -256,11 +256,11 @@ During CLI search, progress is printed to the terminal (single merged progress p
 
 ## Libraries mainly used in this program / 此程序主要使用的库
 
-- The **C core** `lysh.dll` (sources in `lysh-c/`) — performs all phase 1 / phase 2 computation: climate, cave ladder, continentalness, exact footprint average height, aquifer flood judgement, and the **real biome gate**. Its full technical documentation (architecture, per-version data provenance, performance, an appendix of 52 bytecode / floating-point traps) is in [`lysh-c/README.md`](lysh-c/README.md).
+- The **C core** `lysh.dll` (sources in `lysh-c/`) — performs all phase 1 / phase 2 computation: climate, cave ladder, continentalness, exact footprint average height, aquifer flood judgement, the **real biome gate**, and the **cave/canyon carving layer** (the hut Y is the post-carve surface). Its full technical documentation is in [`lysh-c/README.md`](lysh-c/README.md).
 - [SeedFinding](https://github.com/hube12/SeedFinding), [SeedChecker](https://github.com/jellejurre/seed-checker) and [Noise Sampler](https://github.com/KalleStruik/noise-sampler) were the libraries of the deleted Java fallback path; their algorithms now live inside the C core. No Mojang or SeedChecker jar is shipped or required any more.
 - The swamp-hut biome gate needs Minecraft's own multi-noise biome lookup. Its per-version **R-tree parameter data** is vendored from [cubiomes](https://github.com/Cubitect/cubiomes) (MIT) into `lysh-c/src/biome_tree_{18,215,262}.h`, with provenance in each file.
 
-- **C 内核 `lysh.dll`**（源码在 `lysh-c/`）—— 承担全部阶段 1 / 阶段 2 计算：气候、洞穴梯子、大陆性、精确 footprint 平均高度、含水层判定，以及**真实群系门**。完整的技术文档（架构、各版本数据出处、性能、52 条字节码 / 浮点陷阱附录）见 [`lysh-c/README.md`](lysh-c/README.md)。
+- **C 内核 `lysh.dll`**（源码在 `lysh-c/`）—— 承担全部阶段 1 / 阶段 2 计算：气候、洞穴梯子、大陆性、精确 footprint 平均高度、含水层判定、**真实群系门**，以及**洞穴 / 峡谷雕刻层**（小屋 Y 取的是挖过之后的表面）。完整的技术文档见 [`lysh-c/README.md`](lysh-c/README.md)。
 - [SeedFinding](https://github.com/hube12/SeedFinding)、[SeedChecker](https://github.com/jellejurre/seed-checker)、[Noise Sampler](https://github.com/KalleStruik/noise-sampler) 属于已删除的 Java 回退路径；其算法已进入 C 内核。现在既不打包、也不需要任何 Mojang / SeedChecker jar。
 - 群系门需要 Minecraft 自己的多噪声群系查找：它**按版本**的 R 树参数表 vendored 自 [cubiomes](https://github.com/Cubitect/cubiomes)（MIT），位于 `lysh-c/src/biome_tree_{18,215,262}.h`，出处写在每个文件头部。
 

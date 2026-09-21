@@ -64,6 +64,10 @@
 #include "interp_noise.h"
 #include "terrain.h"
 
+/* 雕刻器结果缓存（每个目标 chunk 98304 字节；定义在 phase2.c）。
+ * 用不完整类型 + 指针，避免把这个大数组塞进 lysh_phase2 / 调用方栈。 */
+typedef struct lysh_carve_cache lysh_carve_cache;
+
 typedef struct {
     int horizontal_block_size;   /* 4 */
     int vertical_block_size;     /* 8 */
@@ -80,16 +84,28 @@ typedef struct {
 
     int aq_chunk_x, aq_chunk_z;  /* 当前含水层网格对应的 chunk（惰性重建） */
 
+    /* ---- CARVERS 阶段的雕刻器（26.1.2 语义；见 carver.h）----
+     * 小屋 Y 是**雕刻之后**的高度图（FEATURES 阶段会 primeHeightmaps 重量），
+     * 所以 `lysh_phase2_height` 默认走雕刻后的状态。 */
+    uint64_t world_seed;
+    lysh_carve_cache *carve;     /* 惰性填；分配失败时为 NULL（退回雕刻前的高度） */
+    int carve_enabled;           /* 默认 1；**所有版本**都用（见 eval.c 的版本无关证据） */
+
     /* ---- `interpolated` 网格缓存（26.1.2 的 4(x) × 8(y) × 4(z) cell）----
-     * 每个 (cellX, cellZ) 需要 4 个角点列，每列 49 个 cell-Y 取值
+     * 每个 cell 需要 4 个角点列，每列 49 个 cell-Y 取值
      * （y = minimum_y + i * vertical_block_size，i = 0..48）。
-     *   角点下标 = dx * 2 + dz   （0:(x0,z0) 1:(x0,z1) 2:(x1,z0) 3:(x1,z1)）
-     * `noodle_*` 是 noodle.json 里那 3 个 `interpolated` 子节点的角点值
-     * （0 = thickness，1 = ridge_a，2 = ridge_b）。 */
-    int cell_cache_valid;
-    int cell_cache_x, cell_cache_z;
-    double cell_main[4][49];
-    double cell_noodle[3][4][49];
+     *
+     * ⚠️ 缓存粒度是**一个 chunk 的角点列网格**（5×5 = 25 列），不是单个 cell：
+     *    雕刻器按椭球遍历目标 chunk，x/z 在 cell 之间来回跳，单 cell 缓存会被
+     *    反复重建（每个 cell 要重算 4 个角点列 × 49 个 cell-Y）。一个 chunk = 4×4 个
+     *    cell，相邻 cell 共用角点，所以 25 列就够；`cell_col_valid` 是 25 位有效掩码，
+     *    按需算列（`index = gx * 5 + gz`，gx/gz ∈ 0..4，格点坐标 = chunk 内 cell 偏移）。
+     *    实测（`lysh scan` 100M 格 8 线程）这一项把 phase-2 每候选从 137.6 ms 压到
+     *    44 ms 量级（见 README / 交付报告），因为雕刻阶段的密度求值不再被 cell 重建淹没。 */
+    int cell_col_x, cell_col_z;          /* 角点列网格左下角的 cell 坐标（4 对齐） */
+    unsigned int cell_col_valid;         /* 25 位掩码：bit(gx*5+gz) = 该角点列已算 */
+    double cell_col_main[25][49];
+    double cell_col_noodle[3][25][49];
 
     int inited;
 } lysh_phase2;
@@ -100,8 +116,27 @@ void lysh_phase2_init(lysh_phase2 *p2, uint64_t world_seed, int large_biomes);
 void lysh_phase2_free(lysh_phase2 *p2);
 
 /* MC 的 `getHeight(x, z, WORLD_SURFACE_WG, world).orElse(bottomY)`。
- * 返回 [bottom_y, maximum_y] 内的高度；无命中返回 bottom_y。 */
+ * 返回 [bottom_y, maximum_y] 内的高度；无命中返回 bottom_y。
+ *
+ * ⚠️ 口径（见 carver.h 顶部）：小屋读的 `getHeightmapPos(MOTION_BLOCKING_NO_LEAVES)`
+ *    是 **CARVERS 之后**的方块状态（FEATURES 开头 `primeHeightmaps` 重量），
+ *    所以**本函数走雕刻后的状态**（`carve_enabled` 打开时）。 */
 int lysh_phase2_height(lysh_phase2 *p2, int x, int z);
+
+/* 同一个函数的**雕刻前**口径（= 纯密度 + 含水层）。
+ * 群系门要用它：`Structure.onTopOfChunkCenter` → `ChunkGenerator.getFirstOccupiedHeight`
+ * → `getBaseHeight` → `iterateNoiseColumn`，**只吃 RandomState 的密度函数**，
+ * 拿不到 ChunkAccess ⇒ 看不到雕刻（bytecode 取证见 carver_invoke_spec §5.1）。 */
+int lysh_phase2_height_pre_carver(lysh_phase2 *p2, int x, int z);
+
+/* 开关雕刻层（默认开，**所有版本都用**）。曾经只对 26.2 打开，理由是"旧版用另一套
+ * 播种（`setCarverSeed` + `| 1L`）"——**这个理由已被字节码证伪**：1.18.2 的 `cuv.c(JII)`、
+ * 1.19.2 的 `dbo.c(JII)`、1.20 的 `dij.c(JII)`、1.21 的 `dzx.c(JII)` 与 26.1.2 的
+ * `WorldgenRandom.setLargeFeatureSeed(JII)` 是逐条相同的字节码（都没有 `| 1L`），
+ * 调用点也都是 `setLargeFeatureSeed(seed + carverIndex, ox, oz)` 落在 -8..8 双循环里；
+ * configured_carver 的 JSON 在 1.20~26.1.2 之间逐字段相同（1.18.2/1.19.2 的
+ * client jar 不带 worldgen 数据，本地无法核对，见 eval.c 的 caveat）。 */
+void lysh_phase2_set_carvers(lysh_phase2 *p2, int enable);
 
 /* 26.1.2 的 `final_density`（**含水层拿到的那个**）：
  *   min( squeeze(0.64 * interpolated(sloped_cheese+caves+slides)), noodle )
@@ -114,7 +149,9 @@ double lysh_phase2_density_at(lysh_phase2 *p2, int x, int y, int z);
 double lysh_phase2_density_raw_at(lysh_phase2 *p2, int x, int y, int z);
 
 /* 单个 (x,y,z) 的方块状态（含水层判定后）。
- * 返回 LYSH_BLOCK_NULL 表示实心（调用方回退 defaultBlock = 石头）。 */
+ * 返回 LYSH_BLOCK_NULL 表示实心（调用方回退 defaultBlock = 石头）。
+ * ⚠️ **雕刻前**口径：这是 NOISE 阶段的结果，不含 CARVERS。雕刻后的版本只经由
+ *    `lysh_phase2_height` 暴露（它也是雕刻器 carver.c 的 base_fn）。 */
 lysh_block_state lysh_phase2_block_at(lysh_phase2 *p2, int x, int y, int z);
 
 /* 供测试：直接注入列顶 Y 回调 */

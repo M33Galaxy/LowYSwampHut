@@ -40,6 +40,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "carver.h"
 #include "mcmath.h"
 
 /* Mth.lerp(delta, start, end) = start + delta * (end - start) */
@@ -101,35 +102,49 @@ static void sample_noodle_column(lysh_phase2 *p2, int which, int cell_x, int cel
     }
 }
 
-/* 保证 4 个角点列对应 (x,z) 所在的 cell。角点下标 = dx*2 + dz。 */
+/* 保证 (cell_x, cell_z) 这个 cell 的 4 个角点列已在**当前 chunk 的角点列网格**里。
+ * 网格 = 当前 chunk 的 5×5 个角点列（相邻 cell 共用），下标 gx*5 + gz（gx/gz = 0..4）。
+ * `base = cell & ~3` 对负数也是 floor 到 4 的倍数（补码 AND）。 */
 static void ensure_cell_cache(lysh_phase2 *p2, int cell_x, int cell_z) {
-    if (p2->cell_cache_valid && p2->cell_cache_x == cell_x && p2->cell_cache_z == cell_z)
-        return;
+    int base_x = cell_x & ~3, base_z = cell_z & ~3;
+    if (p2->cell_col_x != base_x || p2->cell_col_z != base_z) {
+        p2->cell_col_x = base_x;
+        p2->cell_col_z = base_z;
+        p2->cell_col_valid = 0;
+    }
+    int gx0 = cell_x - base_x, gz0 = cell_z - base_z;      /* 0..3 */
     for (int dx = 0; dx < 2; dx++) {
         for (int dz = 0; dz < 2; dz++) {
-            int c = dx * 2 + dz;
-            sample_cell_column(p2, cell_x + dx, cell_z + dz, p2->cell_main[c]);
-            sample_noodle_column(p2, 0, cell_x + dx, cell_z + dz, p2->cell_noodle[0][c]);
-            sample_noodle_column(p2, 1, cell_x + dx, cell_z + dz, p2->cell_noodle[1][c]);
-            sample_noodle_column(p2, 2, cell_x + dx, cell_z + dz, p2->cell_noodle[2][c]);
+            int idx = (gx0 + dx) * 5 + (gz0 + dz);
+            if (p2->cell_col_valid & (1u << idx)) continue;
+            int cx = base_x + gx0 + dx, cz = base_z + gz0 + dz;
+            sample_cell_column(p2, cx, cz, p2->cell_col_main[idx]);
+            sample_noodle_column(p2, 0, cx, cz, p2->cell_col_noodle[0][idx]);
+            sample_noodle_column(p2, 1, cx, cz, p2->cell_col_noodle[1][idx]);
+            sample_noodle_column(p2, 2, cx, cz, p2->cell_col_noodle[2][idx]);
+            p2->cell_col_valid |= 1u << idx;
         }
     }
-    p2->cell_cache_valid = 1;
-    p2->cell_cache_x = cell_x;
-    p2->cell_cache_z = cell_z;
 }
 
-/* 对 4 个角点列做三线性插值（Mth.lerp3）。cell_y ∈ [0, 47]。 */
-static double interp_corners(const double corner[4][49], int rel_x, int rel_y, int rel_z,
-                             int cell_y) {
+/* 对一个 cell 的 4 个角点列做三线性插值（Mth.lerp3）。cell_y ∈ [0, 47]。
+ * 角点取自当前 chunk 的 5×5 网格，取值与旧的 4 角点数组**逐位相同**（只是不再重复算角点）。 */
+static double interp_corners_chunk(const double grid[25][49],
+                                   int cell_x, int cell_z,
+                                   int rel_x, int rel_y, int rel_z, int cell_y) {
+    int gx = cell_x & 3, gz = cell_z & 3;
+    const double *c00 = grid[gx * 5 + gz];           /* (x0, z0) */
+    const double *c10 = grid[(gx + 1) * 5 + gz];     /* (x1, z0) */
+    const double *c01 = grid[gx * 5 + gz + 1];       /* (x0, z1) */
+    const double *c11 = grid[(gx + 1) * 5 + gz + 1]; /* (x1, z1) */
     double dx = (double)rel_x / 4.0;
     double dy = (double)rel_y / 8.0;
     double dz = (double)rel_z / 4.0;
     return mc_lerp3(dx, dy, dz,
-                    corner[0][cell_y],     corner[2][cell_y],
-                    corner[0][cell_y + 1], corner[2][cell_y + 1],
-                    corner[1][cell_y],     corner[3][cell_y],
-                    corner[1][cell_y + 1], corner[3][cell_y + 1]);
+                    c00[cell_y],     c10[cell_y],
+                    c00[cell_y + 1], c10[cell_y + 1],
+                    c01[cell_y],     c11[cell_y],
+                    c01[cell_y + 1], c11[cell_y + 1]);
 }
 
 /* `interpolated` 节点的**内容**（逐点求值，不做插值）——
@@ -160,21 +175,76 @@ double lysh_phase2_density_at(lysh_phase2 *p2, int x, int y, int z) {
 
     ensure_cell_cache(p2, cell_x, cell_z);
 
-    double v = interp_corners((const double (*)[49])p2->cell_main, rel_x, rel_y, rel_z, cell_y);
+    double v = interp_corners_chunk(p2->cell_col_main, cell_x, cell_z,
+                                    rel_x, rel_y, rel_z, cell_y);
     double squeezy = lysh_squeeze(v);
 
     /* noodle：thickness / ridge_a / ridge_b 三个 `interpolated` 子节点各自插值，
      * 再按 range_choice 组合；noodle 噪声本身逐点求值。 */
     double noodle_n = lysh_noodle_child(&p2->density, LYSH_NOODLE_N, x, y, z);
-    double thick = interp_corners((const double (*)[49])p2->cell_noodle[0],
-                                  rel_x, rel_y, rel_z, cell_y);
-    double ridge_a = interp_corners((const double (*)[49])p2->cell_noodle[1],
-                                    rel_x, rel_y, rel_z, cell_y);
-    double ridge_b = interp_corners((const double (*)[49])p2->cell_noodle[2],
-                                    rel_x, rel_y, rel_z, cell_y);
+    double thick = interp_corners_chunk(p2->cell_col_noodle[0], cell_x, cell_z,
+                                        rel_x, rel_y, rel_z, cell_y);
+    double ridge_a = interp_corners_chunk(p2->cell_col_noodle[1], cell_x, cell_z,
+                                          rel_x, rel_y, rel_z, cell_y);
+    double ridge_b = interp_corners_chunk(p2->cell_col_noodle[2], cell_x, cell_z,
+                                          rel_x, rel_y, rel_z, cell_y);
     double noodle = lysh_noodle_combine(noodle_n, thick, ridge_a, ridge_b);
 
     return mc_min(squeezy, noodle);
+}
+
+/* ---------------- CARVERS 阶段（carver.c）---------------- */
+
+#define LYSH_CARVE_SLOTS 4
+
+typedef struct {
+    int valid;
+    int chunk_x, chunk_z;
+    unsigned long long lru;
+    uint8_t cells[LYSH_CARVE_CELLS];      /* LYSH_CARVE_UNCHANGED / _AIR / _WATER / _LAVA */
+} lysh_carve_slot;
+
+struct lysh_carve_cache {
+    lysh_carve_slot slot[LYSH_CARVE_SLOTS];
+    unsigned long long tick;
+};
+
+/* 雕刻器的 base_fn：**雕刻前**的方块状态（= 密度 + 含水层）。
+ * ⚠️ 绝不能换成雕刻后的口径 —— carver.c 自己维护"被改过的格子"，
+ *    这里必须是 NOISE 阶段的原始结果。 */
+static lysh_block_state phase2_carve_base_cb(void *user, int x, int y, int z) {
+    return lysh_phase2_block_at((lysh_phase2 *)user, x, y, z);
+}
+
+/* 取目标 chunk 的雕刻结果；没算过就算一遍（LRU 4 槽）。返回 NULL = 关闭/分配失败。 */
+static const uint8_t *carve_cells_for(lysh_phase2 *p2, int cx, int cz) {
+    if (!p2->carve_enabled || !p2->carve) return NULL;
+    lysh_carve_cache *cc = p2->carve;
+
+    for (int i = 0; i < LYSH_CARVE_SLOTS; i++) {
+        if (cc->slot[i].valid && cc->slot[i].chunk_x == cx && cc->slot[i].chunk_z == cz) {
+            cc->slot[i].lru = ++cc->tick;
+            return cc->slot[i].cells;
+        }
+    }
+
+    int victim = 0;
+    for (int i = 0; i < LYSH_CARVE_SLOTS; i++) {
+        if (!cc->slot[i].valid) { victim = i; break; }
+        if (cc->slot[i].lru < cc->slot[victim].lru) victim = i;
+    }
+    lysh_carve_slot *s = &cc->slot[victim];
+
+    /* 26.1.2 的 `applyCarvers` 用 `chunk.getOrCreateNoiseChunk(...).aquifer()`，
+     * 也就是**目标 chunk** 的含水层网格；carveBlock 里的 computeSubstance 全在这个网格上。 */
+    lysh_phase2_ensure_chunk(p2, cx * 16, cz * 16);
+    lysh_carver_apply(p2->world_seed, cx, cz, phase2_carve_base_cb, p2,
+                      &p2->aquifer, s->cells);
+    s->valid = 1;
+    s->chunk_x = cx;
+    s->chunk_z = cz;
+    s->lru = ++cc->tick;
+    return s->cells;
 }
 
 void lysh_phase2_init(lysh_phase2 *p2, uint64_t world_seed, int large_biomes) {
@@ -188,6 +258,8 @@ void lysh_phase2_init(lysh_phase2 *p2, uint64_t world_seed, int large_biomes) {
     p2->sea_level = 63;
     p2->aq_chunk_x = INT32_MIN;
     p2->aq_chunk_z = INT32_MIN;
+    p2->world_seed = world_seed;
+    p2->carve_enabled = 1;
 
     lysh_terrain_init(&p2->terrain, world_seed, large_biomes);
     /* 26.1.2 的 `overworld/ridges_folded` 是 double 求值（见 spline.h） */
@@ -203,10 +275,22 @@ void lysh_phase2_init(lysh_phase2 *p2, uint64_t world_seed, int large_biomes) {
     lysh_interp_noise_init_261(&p2->interp, world_seed,
                                0.25, 0.125, 80.0, 160.0, 8.0,
                                p2->horizontal_block_size, p2->vertical_block_size);
+
+    /* CARVERS 阶段的结果缓存。4 个槽：footprint 最多跨 2x2 = 4 个 chunk，
+     * 一个槽 98304 字节（384*16*16）。分配失败就静默退回"雕刻前"高度。 */
+    p2->carve = (lysh_carve_cache *)calloc(1, sizeof(lysh_carve_cache));
     p2->inited = 1;
 }
 
-void lysh_phase2_free(lysh_phase2 *p2) { lysh_aquifer_free(&p2->aquifer); }
+void lysh_phase2_free(lysh_phase2 *p2) {
+    lysh_aquifer_free(&p2->aquifer);
+    free(p2->carve);
+    p2->carve = NULL;
+}
+
+void lysh_phase2_set_carvers(lysh_phase2 *p2, int enable) {
+    p2->carve_enabled = enable ? 1 : 0;
+}
 
 void lysh_phase2_set_column_top(lysh_phase2 *p2, lysh_aquifer_column_top_fn fn, void *user) {
     p2->aquifer.column_top = fn;
@@ -231,7 +315,7 @@ lysh_block_state lysh_phase2_block_at(lysh_phase2 *p2, int x, int y, int z) {
     return lysh_aquifer_compute_substance(&p2->aquifer, x, y, z, density);
 }
 
-int lysh_phase2_height(lysh_phase2 *p2, int x, int z) {
+int lysh_phase2_height_pre_carver(lysh_phase2 *p2, int x, int z) {
     int vbs = p2->vertical_block_size;
     int min_cell = p2->minimum_block_y;
     int count = p2->vertical_block_count;
@@ -247,4 +331,35 @@ int lysh_phase2_height(lysh_phase2 *p2, int x, int z) {
         }
     }
     return p2->minimum_y;                              /* orElse(bottomY) */
+}
+
+/* 雕刻后的方块状态；UNCHANGED 表示"没被改过"，回退密度 + 含水层。 */
+static inline lysh_block_state carved_state_at(lysh_phase2 *p2, const uint8_t *cells,
+                                               int x, int y, int z) {
+    uint8_t v = cells ? cells[LYSH_CARVE_INDEX(x & 15, y, z & 15)]
+                      : (uint8_t)LYSH_CARVE_UNCHANGED;
+    if (v == LYSH_CARVE_AIR)   return LYSH_BLOCK_AIR;
+    if (v == LYSH_CARVE_WATER) return LYSH_BLOCK_WATER;
+    if (v == LYSH_CARVE_LAVA)  return LYSH_BLOCK_LAVA;
+    return lysh_phase2_block_at(p2, x, y, z);
+}
+
+int lysh_phase2_height(lysh_phase2 *p2, int x, int z) {
+    int vbs = p2->vertical_block_size;
+    int min_cell = p2->minimum_block_y;
+    int count = p2->vertical_block_count;
+
+    lysh_phase2_ensure_chunk(p2, x, z);
+    /* 小屋读的是 FEATURES 开头 `primeHeightmaps` 从**活方块**重量的高度图，
+     * 也就是 CARVERS 之后的状态（见 carver.h / carver_invoke_spec §3.3）。 */
+    const uint8_t *cells = carve_cells_for(p2, x >> 4, z >> 4);
+
+    for (int i = count - 1; i >= 0; i--) {
+        for (int j = vbs - 1; j >= 0; j--) {
+            int y = (min_cell + i) * vbs + j;
+            lysh_block_state st = carved_state_at(p2, cells, x, y, z);
+            if (st != LYSH_BLOCK_AIR) return y + 1;
+        }
+    }
+    return p2->minimum_y;
 }

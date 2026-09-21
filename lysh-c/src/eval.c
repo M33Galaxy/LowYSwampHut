@@ -59,9 +59,12 @@ static int eval_column_top_cb(void *user, int x, int z) {
 
 /* 群系门的列顶回调：user 指向 ctx->p2，给出 **WORLD_SURFACE_WG** 高度。
  * 口径（见 biome.h 的取证）：getFirstOccupiedHeight = getBaseHeight(WORLD_SURFACE_WG) - 1，
- * 而 lysh_phase2_height 就是那个 NOT_AIR 谓词的 getBaseHeight（返回 y+1）。 */
+ * 而 lysh_phase2_height_pre_carver 就是那个 NOT_AIR 谓词的 getBaseHeight（返回 y+1）。
+ * ⚠️ 这里必须用**雕刻前**的口径：`getBaseHeight` 只吃 RandomState 的密度函数
+ * （`iterateNoiseColumn`，没有 ChunkAccess），看不到 CARVERS（见 carver.h 顶部）。
+ *     footprint 的 63 列则相反，读的是 FEATURES 开头重量过的 POST-carver 高度图。 */
 static int eval_biome_height_cb(void *user, int x, int z) {
-    return lysh_phase2_height((lysh_phase2 *)user, x, z);
+    return lysh_phase2_height_pre_carver((lysh_phase2 *)user, x, z);
 }
 
 void lysh_search_ctx_init(lysh_search_ctx *ctx, uint64_t world_seed,
@@ -78,6 +81,24 @@ void lysh_search_ctx_init(lysh_search_ctx *ctx, uint64_t world_seed,
     /* 含水层的 skipSamplingAboveY 需要列顶回调；这里把它接上（与 hut_judge.c /
      * dencol_diff.c 完全一致）。user 是 terrain 本身，phase2 生命周期内有效。 */
     lysh_phase2_set_column_top(&ctx->p2, eval_column_top_cb, &ctx->p2.terrain);
+    /* CARVERS 层对**所有版本**都打开（26.2 / 1.21 / 1.20.1 / 1.19.2 / 1.18.2）。
+     * 依据（逐字节对过，见 carver.h 顶部）：
+     *   · **播种与版本无关**：1.18.2 的 `cuv.c(JII)`、1.19.2 的 `dbo.c(JII)`、
+     *     1.20 的 `dij.c(JII)`、1.21 的 `dzx.c(JII)`、26.1.2 的
+     *     `WorldgenRandom.setLargeFeatureSeed(JII)` 是**逐条相同的字节码**
+     *     （setSeed(seed); l=nextLong(); m=nextLong();
+     *      setSeed(chunkX*l ^ chunkZ*m ^ seed)，**没有** `| 1L`），
+     *     调用点也都是 `setLargeFeatureSeed(seed + carverIndex, ox, oz)` 落在
+     *     硬编码的 -8..8 双循环里。所以旧版分支没有"另一套播种"。
+     *   · **配置在 1.20~26.1.2 完全一致**（从官方 client jar 里取出的
+     *     data/minecraft/worldgen/configured_carver/{cave,cave_extra_underground,canyon}.json
+     *     逐字段相同：0.15 / 0.07 / 0.01，y 范围 above_bottom(8)..180、..47、10..67）。
+     *     ⚠️ **1.18.2 与 1.19.2 的 configured_carver 在本地无法验证**：那两个版本的
+     *     client jar 不带 worldgen 数据（数据在 server jar 里），本机没有对应的
+     *     server jar，也不能联网下载。因此本层对 1.18.2/1.19.2 用的是**同一套
+     *     26.1.2 配置**（cubiomes 的独立实现 `c_cave_118` 也恰好是这些值，
+     *     即 1.18 起未变；若某天拿到那两个 jar，必须重新逐字段核对）。 */
+    lysh_phase2_set_carvers(&ctx->p2, 1);
     /* 真实群系门只要两个噪声（温度 / 植被）加一棵参数树；NORMAL 用
      * minecraft:temperature / minecraft:vegetation，LARGE_BIOMES 用 _large 变体。
      * 参数树必须按版本选（1.18.2 没有 mangrove_swamp，见 biome.h）。 */
@@ -126,31 +147,79 @@ lysh_hut_result lysh_eval_hut(lysh_search_ctx *ctx, int hut_x, int hut_z, int ma
     r.biome_occ_y = br.target.occ_y;
     for (int i = 0; i < 6; i++) r.biome_t[i] = br.target.t[i];
 
-    /* 63 列的精确高度 + y=62 的含水层判定。
+    /* ---- y=62 的含水层判定：**先算**，因为它与雕刻器无关 ----
      * 判定口径（README / hut_judge.c）：computeFluid(x,62,z).at(62)==WATER
-     * —— 直接问 aquifer，不经过密度，避免密度误差污染判定。 */
-    long long sum = 0;
+     * —— 直接问 aquifer，不经过密度，避免密度误差污染判定。
+     * computeFluid 只吃 column_top 回调 + 岩浆噪声，雕刻器既不读也不写含水层网格，
+     * 所以这个判定是先算后算都一样（这正是下面那条提前短路的正确性来源）。 */
     int wet = 0;
     for (int dx = 0; dx < r.size_x; dx++) {
         for (int dz = 0; dz < r.size_z; dz++) {
             int x = hut_x + dx, z = hut_z + dz;
-            sum += lysh_phase2_height(&ctx->p2, x, z);
-
             int level;
             lysh_block_state type;
             lysh_aquifer_compute_fluid(&ctx->p2.aquifer, x, 62, z, &level, &type);
             if (type == LYSH_BLOCK_WATER && 62 < level) wet++;
         }
     }
-    r.sum_h = sum;
-    r.avg_y = (int)(sum / 63);      /* C 的整数除法：向零截断（= oracle 的口径） */
     r.wet_columns = wet;
     r.flooded = (wet == 63);
     r.all_dry = (wet == 0);
 
+    /* ---- 63 列的精确高度 ----
+     * ⚠️ 口径：小屋读的 `getHeightmapPos(MOTION_BLOCKING_NO_LEAVES)` 是 **CARVERS
+     *    之后**的高度（FEATURES 开头 primeHeightmaps 从活方块重量），所以走
+     *    `lysh_phase2_height`（= 雕刻后），见 carver.h。
+     *
+     * 提前短路（避开整层雕刻）：
+     *   · 逐列 post 列顶 <= pre 列顶：pre 口径已经把含水层的水算进去了（`block_at`
+     *     = 密度 + 含水层），而 carveBlock 只在**可替换**（实心/水）的格子上写；
+     *     列顶之上的格子恒为空气、不可替换 ⇒ 那里写不进东西 ⇒ 高度只会降不会升。
+     *     所以 **Y 门绝不能用来跳过雕刻** —— pre 高于门槛的候选可能被雕到门槛之下，
+     *     必须照雕（原本就是这个行为，没动）。
+     *   · 灌水判定与雕刻无关（见上），所以"整片 63 列在 y=62 已经灌满"的候选可以先判掉。
+     * guard（阈值 **64**）：只要某列**雕刻前的列顶方块 >= 64**（即 `pre_h - 1 >= 64`），
+     *     就认为该列顶部落在雕刻器能改写的高度里，雕刻可能削低列顶 ⇒ 不短路、照常雕刻。
+     *     63 列的列顶方块全部 <= 63 时才短路（海平面水层顶在 y=62，水柱最高顶到 y=63）。
+     * 阈值由 62 提到 64（业主决定）：62 会把"列顶方块正好在 y=62"的灌水候选也判成不可短路，
+     *     实测 100M 格扫描里 28 个灌水候选因此**一次都没触发**短路（0/28）；
+     *     提到 64 后同一批里 18/28 走短路，阶段 2 的 CPU 从 219 ms 降到 155 ms。
+     * 取舍（有意为之）：走短路的候选不雕刻，它报告的 sum_h/avg_y 因此是**雕刻前**的，
+     *    reject 也一律记 FLOOD（老口径下"pre 也高于门槛"的那批会记成 Y）。
+     *    两类结果都已被拒绝、ACCEPT 集合**完全不变**，只有诊断口径移动。 */
+    long long sum = 0;
+    int carve_skipped = 0;
+    if (r.flooded) {
+        /* guard 有**早退**：只要有一列雕刻前列顶方块 >= 64 就立刻放弃短路（后面的列不用再看）。
+         * 不早退的话，每次都要多付一整遍 63 列雕刻前高度扫描（~5 ms）—— 短路候选只付这一遍，
+         * 不再走整层雕刻。 */
+        int blocked = 0;                        /* 1 = 有列顶方块 >= 64 */
+        long long sum_pre = 0;
+        for (int dx = 0; dx < r.size_x && !blocked; dx++) {
+            for (int dz = 0; dz < r.size_z; dz++) {
+                int hp = lysh_phase2_height_pre_carver(&ctx->p2, hut_x + dx, hut_z + dz);
+                sum_pre += hp;
+                if (hp - 1 >= 64) { blocked = 1; break; }
+            }
+        }
+        if (!blocked) {                         /* 63 列列顶方块全 <= 63：短路 */
+            sum = sum_pre;
+            carve_skipped = 1;
+        }
+    }
+    if (!carve_skipped) {
+        for (int dx = 0; dx < r.size_x; dx++) {
+            for (int dz = 0; dz < r.size_z; dz++) {
+                sum += lysh_phase2_height(&ctx->p2, hut_x + dx, hut_z + dz);
+            }
+        }
+    }
+    r.sum_h = sum;
+    r.avg_y = (int)(sum / 63);      /* C 的整数除法：向零截断（= oracle 的口径） */
+
     if (!r.biome_ok)     { r.ok = 0; r.reject = LYSH_HUT_REJECT_BIOME; }
-    else if (r.avg_y > max_y) { r.ok = 0; r.reject = LYSH_HUT_REJECT_Y; }
     else if (r.flooded)  { r.ok = 0; r.reject = LYSH_HUT_REJECT_FLOOD; }
+    else if (r.avg_y > max_y) { r.ok = 0; r.reject = LYSH_HUT_REJECT_Y; }
     else                 { r.ok = 1; r.reject = LYSH_HUT_OK; }
     return r;
 }

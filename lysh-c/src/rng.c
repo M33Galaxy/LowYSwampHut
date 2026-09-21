@@ -195,9 +195,18 @@ int lysh_lcg_next_bits(lysh_lcg *r, int bits) {
 }
 
 uint64_t lysh_lcg_next_long(lysh_lcg *r) {
+    /* ⚠️ java.util.Random.nextLong()（以及 BitRandomSource.nextLong）是
+     *     return ((long)next(32) << 32) + next(32);
+     * 第二个 next(32) 是 **i2l**（符号扩展）再加，不是零扩展！
+     * 所以当第二个 next(32) 的最高位为 1 时，结果会比"拼接"小 2^32。
+     * 26.1.2 的字节码逐条（BitRandomSource.nextLong）：
+     *     next(32) -> istore_1 ; next(32) -> istore_2 ;
+     *     iload_1; i2l; bipush 32; lshl -> lstore_3 ; lload_3; iload_2; i2l; ladd
+     * 这里错一位就会让 `setCarverSeed` 派生出的 LCG 状态整体跑偏，
+     * 从而让**小屋朝向 dir** 与**雕刻器播种**都错（实测：本种子下 ci=2 的 b 差 2^32）。 */
     uint64_t hi = (uint64_t)(uint32_t)lysh_lcg_next_bits(r, 32);
-    uint64_t lo = (uint64_t)(uint32_t)lysh_lcg_next_bits(r, 32);
-    return (hi << 32) + lo;
+    int64_t lo = (int64_t)lysh_lcg_next_bits(r, 32);      /* 符号扩展 */
+    return (hi << 32) + (uint64_t)lo;
 }
 
 /* JDK 的 Random.nextInt(bound) */
