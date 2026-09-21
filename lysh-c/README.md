@@ -1,4 +1,4 @@
-﻿# lysh — LowYSwampHut 的 C 内核 技术文档
+# lysh — LowYSwampHut 的 C 内核 技术文档
 
 > **版本：2.0.0**（C 内核与 Java 产品同号；`lysh --help` 的 banner、`NativePhase1/2.coreVersion()` 均报 `lysh 2.0.0`）。
 > **默认 Minecraft 版本：26.2**（不写 `--version` 就是 26.2，见 §0.0）。
@@ -588,7 +588,7 @@ sub-sampler 的非空槽位一一对应”的噪声成立**（erosion 满足：�
 快**，因为 CLI 仍然每带扫两遍（`--list` 需要与 funnel 自洽的统计）。
 
 > ⚠️ **`NativePhase1.loadLibrary()` 的候选列表里，`<cwd>\lysh-c\build\cmake\lysh.dll` 会赢过
-> jar 旁边的 `lysh.dll`**（完整顺序见 `LowYSwampHut-main\README.md`）。**一律用
+> jar 旁边的 `lysh.dll`**（完整顺序见仓库根目录的 `README.md`）。**一律用
 > `-Dlowyswamphut.nativeLib=<绝对路径>` 钉死**；`dist\README.txt` 也写了这条。
 
 ## 8. 现状与维护要点
