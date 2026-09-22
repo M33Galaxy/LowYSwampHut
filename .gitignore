@@ -51,3 +51,4 @@ LowYSwampHut-main/gradle/
 
 # 源码目录下那个 run.bat 是历史遗留；交付用的启动器由 build-dist.ps1 生成到 dist\run.bat。
 LowYSwampHut-main/run.bat
+/.idea/

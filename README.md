@@ -19,12 +19,16 @@ A GUI program for searching low Y-coordinate Swamp Huts in Minecraft Java Editio
 
 **此程序需要 Java 17 或更高版本。** 请确保您已安装 Java。
 
-> ✅ **The runnable jar is built into `dist\`** by the offline script
-> `LowYSwampHut-main\build-dist.ps1`. After that, `java -jar dist\LowYSwampHut.jar`
+> ✅ **The runnable jar is built into `dist\`** by double-clicking `build.bat`
+> (or `LowYSwampHut-main\build-dist.ps1`). The script builds `lysh.dll` then
+> packs `LowYSwampHut-<AppVersion>.jar` (e.g. `LowYSwampHut-2.0.0.jar`).
+> After that, `java -jar dist\LowYSwampHut-2.0.0.jar`
 > (or double-clicking `dist\run.bat`) opens the GUI. See **Command Line / 命令行** below.
 >
-> ✅ **可直接运行的 jar 会由离线脚本 `LowYSwampHut-main\build-dist.ps1` 生成到 `dist\`。**
-> 之后 `java -jar dist\LowYSwampHut.jar`（或双击 `dist\run.bat`）即可打开 GUI。
+> ✅ **可直接运行的 jar：双击仓库根目录 `build.bat`**（或跑
+> `LowYSwampHut-main\build-dist.ps1`）生成到 `dist\`。脚本会先编译 `lysh.dll`，
+> 再打出 `LowYSwampHut-<AppVersion>.jar`（例如 `LowYSwampHut-2.0.0.jar`）。
+> 之后 `java -jar dist\LowYSwampHut-2.0.0.jar`（或双击 `dist\run.bat`）即可打开 GUI。
 > 详见下方 **Command Line / 命令行**。
 >
 > The product is **dependency-free and self-contained**: every terrain / structure judgement is made
@@ -152,21 +156,22 @@ The same JAR supports both the GUI and command-line search. **Launching without 
 
 同一个 JAR 同时支持图形界面与命令行搜索。**不带参数启动时打开 GUI。** 命令行搜索需传入 `--seed` 及可选参数。
 
-One way to build (offline, no Gradle, no network):
+One way to build (offline, no Gradle, no network) — double-click `build.bat`, or:
 
-只有一种构建方式（离线，无需 Gradle 与网络）：
+只有一种构建方式（离线，无需 Gradle 与网络）—— 双击仓库根目录的 `build.bat`，或：
 
 ```powershell
+# Builds lysh.dll (CMake + gcc) then the jar. Use -SkipNative to reuse an existing DLL.
+powershell -NoProfile -ExecutionPolicy Bypass -File LowYSwampHut-main\build-dist.ps1
 # Plain javac --release 17 + jar, offline. The product needs no third-party jar today; if a
 # future version does, add -classpath at the marked spot in build-dist.ps1 -- nothing blocks it.
-powershell -NoProfile -ExecutionPolicy Bypass -File LowYSwampHut-main\build-dist.ps1
 ```
 
 It writes `dist\` / 它会生成 `dist\`：
 
 | File / 文件 | What it is / 说明 |
 |---|---|
-| `LowYSwampHut.jar` | product classes + resources **+ the embedded C core**; this one file is enough（含内嵌 C 内核，单文件即可运行） |
+| `LowYSwampHut-<VERSION>.jar` | product classes + resources **+ the embedded C core**; `VERSION` = `project.AppVersion.VERSION`（含内嵌 C 内核，单文件即可运行） |
 | `lysh.dll` | optional: overrides the embedded core / 可选：覆盖内嵌内核 |
 | `run.bat` | double-click launcher / 双击启动 |
 | `README.txt` | layout and requirements / 布局与依赖说明 |
@@ -196,7 +201,7 @@ that **the `<cwd>` entries win over everything else**, so when testing a specifi
 **Basic usage / 基本用法**
 
 ```bash
-java -jar dist\LowYSwampHut.jar --seed [你的种子]
+java -jar dist\LowYSwampHut-2.0.0.jar --seed [你的种子]
 ```
 
 **Common options / 常用参数**
@@ -230,10 +235,10 @@ as the corresponding GUI tabs. 若不指定范围参数，单种子用世界边�
 **Examples / 示例**
 
 ```bash
-java -jar dist\LowYSwampHut.jar --seed 123456789                       # full world / 整个世界
-java -jar dist\LowYSwampHut.jar --seed 123456789 --square-side 1024 --max-y -40   # 1024×1024 at origin
-java -jar dist\LowYSwampHut.jar --seed 123456789 --min-x -128 --max-x 128 --min-z -128 --max-z 128 --threads 8 -o result.txt
-java -jar dist\LowYSwampHut.jar --seeds-file seeds.txt -o result.txt --export-seeds hits.txt
+java -jar dist\LowYSwampHut-2.0.0.jar --seed 123456789                       # full world / 整个世界
+java -jar dist\LowYSwampHut-2.0.0.jar --seed 123456789 --square-side 1024 --max-y -40   # 1024×1024 at origin
+java -jar dist\LowYSwampHut-2.0.0.jar --seed 123456789 --min-x -128 --max-x 128 --min-z -128 --max-z 128 --threads 8 -o result.txt
+java -jar dist\LowYSwampHut-2.0.0.jar --seeds-file seeds.txt -o result.txt --export-seeds hits.txt
 ```
 
 CLI language follows the same rule as the GUI: Simplified/Traditional Chinese system locales use Chinese, otherwise English. Override with `--lang zh` or `--lang en`. The detected language is printed at startup.
@@ -280,7 +285,7 @@ During CLI search, progress is printed to the terminal (single merged progress p
 
 - The search runs phase 1 + phase 2 **in one pass** inside the C core (`lysh.dll`); results are emitted as each Z-band completes, which is why hits can appear before the single progress bar reaches 100%.
 - The reported Y is the exact average footprint height (`avg_y`) from the C core — which equals to swamp huts' true Y values.
-- The jar contains no Mojang / SeedChecker code, and it is **self-contained**: `java -jar dist\LowYSwampHut.jar` is enough on its own — the C core is embedded and released to the per-user cache on first run.
+- The jar contains no Mojang / SeedChecker code, and it is **self-contained**: `java -jar dist\LowYSwampHut-2.0.0.jar` is enough on its own — the C core is embedded and released to the per-user cache on first run.
 - The "Precise Generation Check" checkbox and the `--check-gen` flag have been **removed** . There is no `×` / "x" "cannot generate" marker any more — it is structurally impossible.
 - The C core is required at run time but ships **inside** the jar, so there is nothing to install. A loose `lysh.dll` (or `-Dlowyswamphut.nativeLib` / `LYSH_NATIVE_LIB`) overrides the embedded one. If no core can be loaded, the GUI still opens but reports that the native core is unavailable.
 - For large searching area, the search may take a long time. It is recommended to use appropriate thread counts based on your computer's performance.
@@ -288,7 +293,7 @@ During CLI search, progress is printed to the terminal (single merged progress p
 
 - 搜索在 C 内核（`lysh.dll`）里把阶段 1 + 阶段 2 **一趟跑完**；结果在每个 Z 带完成时输出，这就是为什么进度条到 100% 之前就可能出现命中。
 - 输出的 Y 是 C 内核给出的精确 footprint 平均高度（`avg_y`）—— 等于女巫小屋的真实Y值。
-- jar 内不含任何 Mojang / SeedChecker 代码，且**自足**：`java -jar dist\LowYSwampHut.jar` 单独就能跑 —— C 内核内嵌在 jar 里，首次运行时释放到每用户缓存目录。
+- jar 内不含任何 Mojang / SeedChecker 代码，且**自足**：`java -jar dist\LowYSwampHut-2.0.0.jar` 单独就能跑 —— C 内核内嵌在 jar 里，首次运行时释放到每用户缓存目录。
 - "精确检查生成情况"控件与 `--check-gen` 开关已**删除**；`×` / "x"（"无法生成"）标记也已彻底不存在 —— 它在结构上已不可能产生。
 - C 内核是运行时必需的，但它**内嵌在 jar 里**，无需额外安装。jar 旁边的 `lysh.dll`（或 `-Dlowyswamphut.nativeLib` / `LYSH_NATIVE_LIB`）会覆盖内嵌的那一份。一份都加载不到时 GUI 仍能打开，但会提示原生内核不可用。
 - 对于大范围的坐标搜索，可能需要较长时间。建议根据您的计算机性能使用适当的线程数。

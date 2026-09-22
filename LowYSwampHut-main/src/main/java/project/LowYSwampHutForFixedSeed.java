@@ -143,7 +143,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         currentLocale = appLocale.locale();
         messages = appLocale.bundle();
 
-        setTitle(getString("window.title"));
+        setTitle(AppVersion.titled(getString("window.title")));
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLayout(new BorderLayout());
 
@@ -1764,7 +1764,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     private void updateUITexts() {
         SwingUtilities.invokeLater(() -> {
             // 更新窗口标题
-            setTitle(getString("window.title"));
+            setTitle(AppVersion.titled(getString("window.title")));
 
             // 更新标签页标题
             JTabbedPane tabbedPane = (JTabbedPane) getContentPane().getComponent(0);
