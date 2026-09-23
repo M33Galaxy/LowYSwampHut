@@ -403,12 +403,6 @@ java -jar dist\LowYSwampHut.jar `
 | `lowyswamphut.nativePhase2` | `true` | 设为 `false` 只是**关掉原生**；**没有** Java 回退，结果是“不能搜索” |
 | `lowyswamphut.maxSearchAxisSpan` / `maxSearchIterations` / `maxSearchThreads` | 见 `SearchCoords` | 搜索范围/迭代数/线程数上限 |
 
-> ⚠️ **已删除的系统属性（不要再用）**：`lowyswamphut.nativePhase1`、
-> `lowyswamphut.densityHeightmap`、`lowyswamphut.densityPrefilter`、`lowyswamphut.phase2CGenCheck`。
-> 它们都属于那条已删除的 **Java / SeedChecker 老路径**（`checkHeight` / `checkHeightByDensity` /
-> `DensityHeightmap` / `findGeneratedHutFloorY` / 真实生成交叉校验）。那套 Java 代码**一行都没有
-> 保留** —— 加载不到内核就是不能搜索（内核内嵌在 jar 里，所以“缺”指加载失败，不是“没放文件”）。
-
 阶段 1 + 阶段 2 的唯一实现是 C：`NativePhase2.gradeScanNative`（→ `lysh_grade_scan` +
 `lysh_eval_hut`）。`Y` 的口径统一到 C：`Result.height` 就是 C 的 `avg_y`（= `sum(h)/63`，§2.5.4）。
 **诊断输出**（定位问题用，不进 i18n 资源）：
