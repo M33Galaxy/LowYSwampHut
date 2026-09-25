@@ -724,7 +724,7 @@ public final class CmdLineRunner {
         private Long squareSide;
         private String outputFile = "result.txt";
         private String exportSeedsFile;
-        private String versionName = "26.2";
+        private String versionName = "26.2~26.3";
         private String presetName = "normal";
         private int threads = Math.max(1, Runtime.getRuntime().availableProcessors());
         private boolean noProgress;

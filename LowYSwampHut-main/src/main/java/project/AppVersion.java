@@ -6,7 +6,7 @@ package project;
  */
 public final class AppVersion {
 
-    public static final String VERSION = "2.0.0";
+    public static final String VERSION = "2.0.1";
 
     private AppVersion() {
     }

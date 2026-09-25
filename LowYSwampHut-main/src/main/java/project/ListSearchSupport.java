@@ -11,9 +11,9 @@ import java.util.function.BooleanSupplier;
  */
 final class ListSearchSupport {
     static final int DEFAULT_MIN_X = -128;
-    static final int DEFAULT_MAX_X = 128;
+    static final int DEFAULT_MAX_X = 127;
     static final int DEFAULT_MIN_Z = -128;
-    static final int DEFAULT_MAX_Z = 128;
+    static final int DEFAULT_MAX_Z = 127;
     static final long SEED_PARALLEL_MAX_AREA = 150_000L;
     static final long TARGET_CELLS_PER_THREAD = 4096L;
 

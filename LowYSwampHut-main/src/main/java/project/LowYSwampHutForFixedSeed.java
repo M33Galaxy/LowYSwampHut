@@ -30,6 +30,8 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     private static final int DEFAULT_LIST_MAX_Z = ListSearchSupport.DEFAULT_MAX_Z;
     /** 结果区 UI 批量刷新间隔，减轻 EDT 卡顿 */
     private static final long LIST_RESULT_UI_FLUSH_MS = 250L;
+    /** region 坐标 ×512 = 方块坐标 */
+    private static final int REGION_TO_BLOCKS = 512;
 
     // 单种子搜索相关组件
     private JLabel searchSeedLabel;
@@ -42,6 +44,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     private JLabel searchMinZLabel;
     private JLabel searchMaxZLabel;
     private JLabel searchLanguageLabel;
+    private JLabel minXBlocksHintLabel;
+    private JLabel maxXBlocksHintLabel;
+    private JLabel minZBlocksHintLabel;
+    private JLabel maxZBlocksHintLabel;
+    private JLabel squareSideBlocksHintLabel;
     private JTextField searchSeedField;
     private JTextField searchThreadCountField;
     private JComboBox<String> maxHeightComboBox;
@@ -92,6 +99,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
     private JLabel listSearchMaxXLabel;
     private JLabel listSearchMinZLabel;
     private JLabel listSearchMaxZLabel;
+    private JLabel listMinXBlocksHintLabel;
+    private JLabel listMaxXBlocksHintLabel;
+    private JLabel listMinZBlocksHintLabel;
+    private JLabel listMaxZBlocksHintLabel;
+    private JLabel listSquareSideBlocksHintLabel;
     private File selectedSeedFile;
     private JTextField listSearchThreadCountField;
     private JComboBox<String> listMaxHeightComboBox;
@@ -186,6 +198,44 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         }
     }
 
+    /** 将 region 输入换算为 “ = -30,000,128方块” 提示文案（每 3 位逗号分隔） */
+    private String formatBlocksHint(String regionText) {
+        try {
+            long region = Long.parseLong(regionText.trim());
+            long blocks = region * REGION_TO_BLOCKS;
+            return getString("hint.blocks", String.format(Locale.US, "%,d", blocks));
+        } catch (NumberFormatException e) {
+            return "";
+        }
+    }
+
+    private void updateBlocksHint(JTextField field, JLabel hintLabel) {
+        if (field == null || hintLabel == null) {
+            return;
+        }
+        hintLabel.setText(formatBlocksHint(field.getText()));
+    }
+
+    private JLabel createBlocksHintLabel(JTextField field) {
+        JLabel hintLabel = new JLabel();
+        hintLabel.setFont(getLoadedFont());
+        updateBlocksHint(field, hintLabel);
+        field.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                updateBlocksHint(field, hintLabel);
+            }
+
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                updateBlocksHint(field, hintLabel);
+            }
+
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                updateBlocksHint(field, hintLabel);
+            }
+        });
+        return hintLabel;
+    }
+
     // 创建单种子搜索面板
     private JPanel createSingleSeedSearchPanel() {
         JPanel mainPanel = new JPanel(new BorderLayout());
@@ -267,7 +317,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.weightx = 1.0;
         String[] versionOptions = GameVersion.displayNames();
         versionComboBox = new JComboBox<>(versionOptions);
-        versionComboBox.setSelectedIndex(0); // 默认选择 26.2
+        versionComboBox.setSelectedIndex(0); // 默认选择 26.2~26.3
         inputPanel.add(versionComboBox, gbc);
 
         // 世界类型选择下拉框
@@ -308,6 +358,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             }
         });
         inputPanel.add(minXField, gbc);
+        gbc.gridx = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        minXBlocksHintLabel = createBlocksHintLabel(minXField);
+        inputPanel.add(minXBlocksHintLabel, gbc);
 
         // MaxX 输入
         gbc.gridx = 0;
@@ -327,6 +382,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             }
         });
         inputPanel.add(maxXField, gbc);
+        gbc.gridx = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        maxXBlocksHintLabel = createBlocksHintLabel(maxXField);
+        inputPanel.add(maxXBlocksHintLabel, gbc);
 
         // MinZ 输入
         gbc.gridx = 0;
@@ -346,6 +406,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             }
         });
         inputPanel.add(minZField, gbc);
+        gbc.gridx = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        minZBlocksHintLabel = createBlocksHintLabel(minZField);
+        inputPanel.add(minZBlocksHintLabel, gbc);
 
         // MaxZ 输入
         gbc.gridx = 0;
@@ -365,6 +430,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             }
         });
         inputPanel.add(maxZField, gbc);
+        gbc.gridx = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        maxZBlocksHintLabel = createBlocksHintLabel(maxZField);
+        inputPanel.add(maxZBlocksHintLabel, gbc);
 
         // 正方形区域边长（勾选后按中心 0,0 填入 min/max）
         gbc.gridx = 0;
@@ -400,6 +470,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             }
         });
         inputPanel.add(squareSideField, gbc);
+        gbc.gridx = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        squareSideBlocksHintLabel = createBlocksHintLabel(squareSideField);
+        inputPanel.add(squareSideBlocksHintLabel, gbc);
         applyBoundFieldEnableState(true);
         applySquareSideToBounds();
 
@@ -1277,7 +1352,7 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         gbc.weightx = 1.0;
         String[] versionOptions = GameVersion.displayNames();
         listVersionComboBox = new JComboBox<>(versionOptions);
-        listVersionComboBox.setSelectedIndex(0); // 默认选择 1.21~26.1
+        listVersionComboBox.setSelectedIndex(0); // 默认选择 26.2~26.3
         inputPanel.add(listVersionComboBox, gbc);
 
         // 世界类型选择下拉框
@@ -1317,6 +1392,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             }
         });
         inputPanel.add(listMinXField, gbc);
+        gbc.gridx = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        listMinXBlocksHintLabel = createBlocksHintLabel(listMinXField);
+        inputPanel.add(listMinXBlocksHintLabel, gbc);
 
         // MaxX 输入
         gbc.gridx = 0;
@@ -1336,6 +1416,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             }
         });
         inputPanel.add(listMaxXField, gbc);
+        gbc.gridx = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        listMaxXBlocksHintLabel = createBlocksHintLabel(listMaxXField);
+        inputPanel.add(listMaxXBlocksHintLabel, gbc);
 
         // MinZ 输入
         gbc.gridx = 0;
@@ -1355,6 +1440,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             }
         });
         inputPanel.add(listMinZField, gbc);
+        gbc.gridx = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        listMinZBlocksHintLabel = createBlocksHintLabel(listMinZField);
+        inputPanel.add(listMinZBlocksHintLabel, gbc);
 
         // MaxZ 输入
         gbc.gridx = 0;
@@ -1374,6 +1464,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             }
         });
         inputPanel.add(listMaxZField, gbc);
+        gbc.gridx = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        listMaxZBlocksHintLabel = createBlocksHintLabel(listMaxZField);
+        inputPanel.add(listMaxZBlocksHintLabel, gbc);
 
         // 正方形区域边长（勾选后按中心 0,0 填入 min/max）
         gbc.gridx = 0;
@@ -1409,6 +1504,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
             }
         });
         inputPanel.add(listSquareSideField, gbc);
+        gbc.gridx = 2;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.weightx = 0;
+        listSquareSideBlocksHintLabel = createBlocksHintLabel(listSquareSideField);
+        inputPanel.add(listSquareSideBlocksHintLabel, gbc);
         applyListBoundFieldEnableState(true);
         applyListSquareSideToBounds();
 
@@ -1816,6 +1916,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         if (squareSideCheckBox != null) {
             squareSideCheckBox.setText(getString("label.squareSide"));
         }
+        updateBlocksHint(minXField, minXBlocksHintLabel);
+        updateBlocksHint(maxXField, maxXBlocksHintLabel);
+        updateBlocksHint(minZField, minZBlocksHintLabel);
+        updateBlocksHint(maxZField, maxZBlocksHintLabel);
+        updateBlocksHint(squareSideField, squareSideBlocksHintLabel);
         if (searchLanguageLabel != null) {
             searchLanguageLabel.setText(getString("label.language"));
         }
@@ -1901,6 +2006,11 @@ public class LowYSwampHutForFixedSeed extends JFrame {
         if (listSquareSideCheckBox != null) {
             listSquareSideCheckBox.setText(getString("label.squareSide"));
         }
+        updateBlocksHint(listMinXField, listMinXBlocksHintLabel);
+        updateBlocksHint(listMaxXField, listMaxXBlocksHintLabel);
+        updateBlocksHint(listMinZField, listMinZBlocksHintLabel);
+        updateBlocksHint(listMaxZField, listMaxZBlocksHintLabel);
+        updateBlocksHint(listSquareSideField, listSquareSideBlocksHintLabel);
 
         // 更新按钮文本
         if (listSearchStartButton != null) {

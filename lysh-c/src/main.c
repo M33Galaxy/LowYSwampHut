@@ -15,7 +15,8 @@
  *   lysh hut  --seed <long> --x <hutX> --z <hutZ> [--max-y M] [--phase2-max-y Y]
  *             [--version V] [--preset P]
  *
- *   --version  26.2（默认）| 1.21 | 1.20.1 | 1.19.2 | 1.18.2
+ *   --version  26.2~26.3（默认）| 1.19.x~26.1 | 1.18.x
+ *              （亦接受旧别名：26.2 / 26.3 / 1.21 / 1.20.1 / 1.19.2 / 1.18.2 等）
  *   --preset   NORMAL（默认）| LARGE_BIOMES | SINGLE_BIOME
  *   --max-y    阶段 1 的 maxHeight，默认 -40；给 -50/-54 时内部一律按 -50
  *              （与生产代码的 phase1CheckHeight 一致）
@@ -56,7 +57,7 @@ static void usage(void) {
     printf("  lysh hut  --seed <long> --x <hutX> --z <hutZ> [--max-y M] [--phase2-max-y Y]\n");
     printf("            [--version V] [--preset P]\n");
     printf("  lysh selftest <seed>\n\n");
-    printf("  --version  26.2 (default) | 1.21 | 1.20.1 | 1.19.2 | 1.18.2\n");
+    printf("  --version  26.2~26.3 (default) | 1.19.x~26.1 | 1.18.x\n");
     printf("  --preset   NORMAL (default) | LARGE_BIOMES | SINGLE_BIOME\n");
     printf("  --max-y    phase-1 maxHeight, default -40; -50/-54 are clamped to -50\n");
     printf("  --phase2-max-y  final Y gate (avg_y <= this); default = --max-y\n");
@@ -97,14 +98,22 @@ static const char *const REJECT_NAMES[LYSH_P1_REJECT_KIND_N] = {
 };
 
 /* 版本 → 阶段 1 的门。
- * ⚠️ **默认是 26.2**（用户明确要求）：所有 opts 全零初始化即 26.2 语义，
- *    所以这里只有在**不是** 26.2 时才去动 pre_26_2。 */
+ * ⚠️ **默认是 26.2~26.3**（用户明确要求）：所有 opts 全零初始化即 26.2 语义，
+ *    所以这里只有在**不是** 26.2 路径时才去动 pre_26_2。
+ * 底层三条逻辑：1.18.x / 1.19.x~26.1 / 26.2~26.3。 */
 static int parse_version(const char *s, lysh_phase1_opts *o) {
-    if (!strcmp(s, "1.18.2") || !strcmp(s, "1.18")) { o->mc_1_18_2 = 1; o->pre_26_2 = 1; return 0; }
-    if (!strcmp(s, "1.19.2") || !strcmp(s, "1.19")) { o->mc_1_18_2 = 0; o->pre_26_2 = 1; return 0; }
-    if (!strcmp(s, "1.20.1") || !strcmp(s, "1.20")) { o->mc_1_18_2 = 0; o->pre_26_2 = 1; return 0; }
-    if (!strcmp(s, "1.21") || !strcmp(s, "1.21.1")) { o->mc_1_18_2 = 0; o->pre_26_2 = 1; return 0; }
-    if (!strcmp(s, "26.2") || !strcmp(s, "26.1")) { o->mc_1_18_2 = 0; o->pre_26_2 = 0; return 0; }
+    if (!strcmp(s, "1.18.2") || !strcmp(s, "1.18") || !strcmp(s, "1.18.x") || !strcmp(s, "1.18.1")) {
+        o->mc_1_18_2 = 1; o->pre_26_2 = 1; return 0;
+    }
+    if (!strcmp(s, "1.19.2") || !strcmp(s, "1.19") || !strcmp(s, "1.19.x")
+        || !strcmp(s, "1.20.1") || !strcmp(s, "1.20") || !strcmp(s, "1.20.x")
+        || !strcmp(s, "1.21") || !strcmp(s, "1.21.1") || !strcmp(s, "1.21.x~26.1")
+        || !strcmp(s, "1.21.5~26.1") || !strcmp(s, "1.19.x~26.1") || !strcmp(s, "26.1")) {
+        o->mc_1_18_2 = 0; o->pre_26_2 = 1; return 0;
+    }
+    if (!strcmp(s, "26.2") || !strcmp(s, "26.3") || !strcmp(s, "26.2~26.3")) {
+        o->mc_1_18_2 = 0; o->pre_26_2 = 0; return 0;
+    }
     return 1;
 }
 
@@ -259,7 +268,7 @@ static int cmd_scan(int argc, char **argv) {
     if (!quiet) {
         printf("lysh scan  (phase 1 + phase 2)\n");
         printf("  seed        : %" PRId64 "\n", (int64_t)o.seed);
-        printf("  version     : %s%s\n", o.opts.mc_1_18_2 ? "1.18.2" : (o.opts.pre_26_2 ? "1.19+" : "26.2"),
+        printf("  version     : %s%s\n", o.opts.mc_1_18_2 ? "1.18.x" : (o.opts.pre_26_2 ? "1.19.x~26.1" : "26.2~26.3"),
                o.opts.single_biome ? "  preset=SINGLE_BIOME" : (o.opts.large_biomes ? "  preset=LARGE_BIOMES" : ""));
         printf("  erosion     : TIERED early exit (approximate; exact fallback if unavailable)\n");
         printf("  maxHeight   : %d   (phase 1)\n", o.max_height);

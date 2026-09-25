@@ -1,11 +1,11 @@
 # LowYSwampHut Search Tool
 
 **Version 2.0.0** — the C core and the Java product share this version number.
-**Default Minecraft version: 26.2** (the version selector opens on 26.2; see the
+**Default Minecraft version: 26.2~26.3** (the version selector opens on 26.2~26.3; see the
 "Version" option below).
 
 **版本 2.0.0** —— C 内核与 Java 产品同号。
-**默认 Minecraft 版本：26.2**（版本下拉框默认选中 26.2，详见下方 "版本" 选项）。
+**默认 Minecraft 版本：26.2~26.3**（版本下拉框默认选中 26.2~26.3，详见下方 "版本" 选项）。
 
 A GUI program for searching low Y-coordinate Swamp Huts in Minecraft Java Edition. This program supports versions 1.18 and above.
 
@@ -92,9 +92,9 @@ The top-left part is the **Parameter Settings** area, which includes:
 
 **筛选女巫小屋高度**：女巫小屋的最大 Y 坐标。值越高，搜索越慢。选项：0、-10、-20、-30、-40（默认：-40）。
 
-**Version**: The Minecraft version to use. Options: 26.2, 1.21.1~26.1, 1.20.1, 1.19.2, 1.18.2 (default: 26.2).
+**Version**: The Minecraft version to use. Options: 26.2~26.3, 1.19.x~26.1, 1.18.x (default: 26.2~26.3).
 
-**版本**：要使用的 Minecraft 版本。选项：26.2、1.21.1~26.1、1.20.1、1.19.2、1.18.2（默认：26.2）。
+**版本**：要使用的 Minecraft 版本。选项：26.2~26.3、1.19.x~26.1、1.18.x（默认：26.2~26.3）。
 
 **MinX/MaxX/MinZ/MaxZ/Square side length (x512)**: The coordinate range to search for Swamp Huts. The default values are the world boundaries (-58594 to 58593). Valid range is -30,000,000 to 30,000,000. Square side length option can search specified length of square centered at (0,0) (default 117188).
 
@@ -212,14 +212,14 @@ java -jar dist\LowYSwampHut-2.0.0.jar --seed [你的种子]
 | `--seeds-file`, `-f`        | Seed list file / 种子列表文件（每行一个） | One of `--seed` or `--seeds-file` / 与单种子二选一 |
 | `--max-y`                   | Max Swamp Hut Y filter / 女巫小屋最大 Y | `-40`                           |
 | `--threads`                 | Thread count / 线程数                   | CPU core count / CPU 核心数     |
-| `--version`                 | Minecraft version / 版本                | `26.2`                          |
+| `--version`                 | Minecraft version / 版本                | `26.2~26.3`                     |
 | `--preset`                  | World preset / 世界类型                 | `normal`                        |
 | `--lang zh\|en`             | Language override / 覆盖语言            | System default / 跟随系统（与 GUI 相同规则） |
 | `--output`, `-o`            | Full results file / 完整结果文件        | `result.txt`                    |
 | `--export-seeds`            | Export hit seeds only / 仅导出命中种子  | Off / 不导出                    |
 | `--no-progress`             | Disable progress output / 关闭进度输出  | progress enabled / 默认显示进度 |
 
-**Version values / 版本可选值:** `26.2`, `1.21.x~26.1`, `1.20.x`, `1.19.x`, `1.18.x`
+**Version values / 版本可选值:** `26.2~26.3`, `1.19.x~26.1`, `1.18.x`
 **Preset values / 世界类型可选值:** `normal` (普通世界), `large-biomes` (巨型生物群系), `single-biome` (单生物群系(沼泽))
 
 **Search area / 搜索范围** — if you do not specify any range options, **Single seed / 单种子** uses the
@@ -256,7 +256,7 @@ During CLI search, progress is printed to the terminal (single merged progress p
 - **Progress tracking** / **进度跟踪**：实时显示搜索进度、已过时间和预计剩余时间
 - **Result sorting** / **结果排序**：按 Y 坐标或距离排序结果
 - **Export functionality** / **导出功能**：导出搜索结果或种子列表
-- **Version support** / **版本支持**：支持多个 Minecraft 版本（1.18.2、1.19.2、1.20.1、1.21.1、26.2+）
+- **Version support** / **版本支持**：支持多个 Minecraft 版本（1.18.x、1.19.x~26.1、26.2~26.3）
 - **Batch processing** / **批量处理**：从列表文件处理多个种子
 
 ## Libraries mainly used in this program / 此程序主要使用的库
