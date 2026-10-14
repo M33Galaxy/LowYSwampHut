@@ -49,7 +49,7 @@
 #include "structure.h"
 
 static void usage(void) {
-    printf("lysh 2.0.0 -- LowYSwampHut C core (phase 1 + phase 2)\n\n");
+    printf("lysh 2.0.2 -- LowYSwampHut C core (phase 1 + phase 2)\n\n");
     printf("usage:\n");
     printf("  lysh scan --seed <long> [--regions N | --rx0 A --rx1 B --rz0 C --rz1 D]\n");
     printf("            [--threads T] [--max-y M] [--phase2-max-y Y] [--version V] [--preset P]\n");

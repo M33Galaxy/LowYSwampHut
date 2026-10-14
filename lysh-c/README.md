@@ -1,6 +1,6 @@
-﻿# lysh — LowYSwampHut 的 C 内核 技术文档
+# lysh — LowYSwampHut 的 C 内核 技术文档
 
-> **版本：2.0.0**（C 内核与 Java 产品同号；`lysh --help` 的 banner、`NativePhase1/2.coreVersion()` 均报 `lysh 2.0.0`）。
+> **版本：2.0.2**（C 内核与 Java 产品同号；`lysh --help` 的 banner、`NativePhase1/2.coreVersion()` 均报 `lysh 2.0.2`）。
 > **默认 Minecraft 版本：26.2**（不写 `--version` 就是 26.2，见 §0.0）。
 > **陷阱日志见 §6**（52 条字节码/浮点陷阱；只留结论与规格常数，取证过程已压缩）。
 

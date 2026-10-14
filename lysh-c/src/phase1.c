@@ -140,10 +140,13 @@ int lysh_phase1_check_ex(const lysh_phase1 *p, const lysh_phase1_opts *o,
     int hx = hut_x + 3;
     int hz = hut_z + 3;
 
-    if (lysh_entrance(&p->caves, hx, 50, hz) >= 0) {
-        if (out) out->reject = LYSH_P1_REJECT_ENTRANCE_50;
-        return 0;
-    }
+    /* ⚠️ 顺序与旧 Java 实现**有意不同**（旧版见 _archive 里的 SearchCoords.java）：
+     *   旧：Entrance@50 单独淘汰 → 会把「Entrance@50 略大于 0、但 Cheese@50 为负」
+     *       的候选误杀（实测确有这种小屋：E50=+0.0089 / C50=-0.0941）。
+     *   新：y=60 提到最前（实验表明它的排除率高，前置比放在组后更快——每提前淘汰
+     *       一格就省下整组的 5 次 Entrance + 最多 5 次 Cheese）；
+     *       y=50 并入下面 10..50 那一组，与 10..40 同判据：两者都 >= 0 才淘汰。
+     *   ⇒ 新拒绝集是旧拒绝集的**子集**，只会救回、不会新增淘汰。 */
     if (lysh_entrance(&p->caves, hx, 60, hz) >= 0) {
         if (out) out->reject = LYSH_P1_REJECT_ENTRANCE_60;
         return 0;
@@ -171,8 +174,8 @@ int lysh_phase1_check_ex(const lysh_phase1 *p, const lysh_phase1_opts *o,
         }
     }
 
-    /* 10-40 用 Entrance */
-    for (int y = 10; y <= 40; y += 10) {
+    /* 10-50 用 Entrance（y=50 已并入本组，见上面的说明） */
+    for (int y = 10; y <= 50; y += 10) {
         if (lysh_entrance(&p->caves, hx, y, hz) >= 0 &&
             lysh_cheese(&p->caves, hx, y, hz) >= 0) {
             if (out) out->reject = LYSH_P1_REJECT_CAVE_LADDER_POS;

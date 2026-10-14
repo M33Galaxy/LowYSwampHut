@@ -1,22 +1,29 @@
 /* lysh phase1.h —— 阶段 1 完整判定（SearchCoords.check 的 C 移植）。
  *
- * 判定顺序（必须与 Java 一致，否则 funnel 计数不同）：
+ * 判定顺序：
  *   1. 群系近似门：erosion >= 0.55 → temperature → ridge   （单群系世界整段跳过）
- *   2. Entrance(x+3, 50, z+3) >= 0        → 淘汰
- *   3. Entrance(x+3, 60, z+3) >= 0        → 淘汰
- *   4. Entrance2(x+3, maxHeight, z+3) >= 0 && Cheese(...) >= 0  → 淘汰
- *   5. y = 0, -10, ... >= ladderFloor 且 maxHeight < y：
+ *   2. Entrance(x+3, 60, z+3) >= 0        → 淘汰
+ *   3. Entrance2(x+3, maxHeight, z+3) >= 0 && Cheese(...) >= 0  → 淘汰
+ *   4. y = 0, -10, ... >= ladderFloor 且 maxHeight < y：
  *        Entrance2(y) >= 0 && Cheese(y) >= 0 → 淘汰
  *      ladderFloor = max(-50, min(-40, maxHeight))
- *   6. y = 10, 20, 30, 40：Entrance(y) >= 0 && Cheese(y) >= 0 → 淘汰
- *   7. 群系近似门：continentalness < -0.11 → 淘汰
- *   8. y = maxHeight, +10, ... <= 60：aquiferFloodedness(x+3, y*0.67, z+3) > 0.41 → 淘汰
+ *   5. y = 10, 20, 30, 40, **50**：Entrance(y) >= 0 && Cheese(y) >= 0 → 淘汰
+ *   6. 群系近似门：continentalness < -0.11 → 淘汰
+ *   7. y = maxHeight, +10, ... <= 60：aquiferFloodedness(x+3, y*0.67, z+3) > 0.41 → 淘汰
  *
- * ⚠️ 第 7 步在洞穴梯子【之后】—— 别为了"看起来更合理"把它提前，
- *    否则 funnel 数字会变（这一步只在 <1% 的格子上被采到）。
+ * ⚠️ 有**两处有意偏离**旧 Java 实现（不是移植错误，改动理由见下）：
+ *   · 第 2 步：旧版这里先是「Entrance@50 单独淘汰」，再是「Entrance@60 单独淘汰」。
+ *     旧版那条会把 `Entrance@50` 略大于 0、但 `Cheese@50` 为负的候选误杀
+ *     （实测：E50=+0.0088848 / C50=-0.0941219 的小屋被漏掉，1.6.0 同样漏）。
+ *     现在 y=60 提前、y=50 并入第 5 步（与 10..40 同判据），新拒绝集是旧拒绝集的
+ *     子集 ⇒ 只会救回、不会新增淘汰。y=50 放在组内而不是单独提前，是因为
+ *     Entrance 与 Cheese 是独立判定，顺序只影响成本：提前淘汰一格就省下整组
+ *     （5 次 Entrance + 最多 5 次 Cheese），实测 E60 前置比组前置快约 8%。
+ *   · 第 6 步在洞穴梯子【之后】—— 别为了"看起来更合理"把它提前，
+ *     否则 funnel 数字会变（这一步只在 <1% 的格子上被采到）。
  *
- * 关于近似：第 1、7 步是用户明确要求保持的近似（精确群系判定会慢约十倍）。
- * C 端的目标是【逐位复现这个近似】，不是"修正"它。
+ * 关于近似：第 1、6 步是用户明确要求保持的近似（精确群系判定会慢约十倍）。
+ * 洞穴梯子同样是近似 —— 它本来就会产生假阴性，上面的改动只是消掉其中一类。
  */
 #ifndef LYSH_PHASE1_H
 #define LYSH_PHASE1_H
