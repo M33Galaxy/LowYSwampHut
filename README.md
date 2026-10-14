@@ -92,9 +92,9 @@ The top-left part is the **Parameter Settings** area, which includes:
 
 **筛选女巫小屋高度**：女巫小屋的最大 Y 坐标。值越高，搜索越慢。选项：0、-10、-20、-30、-40（默认：-40）。
 
-**Version**: The Minecraft version to use. Options: 26.2~26.3, 1.19.x~26.1, 1.18.x (default: 26.2~26.3).
+**Version**: The Minecraft version to use. Options: 26.2-26.3, 1.19.x-26.1, 1.18.x (default: 26.2-26.3).
 
-**版本**：要使用的 Minecraft 版本。选项：26.2~26.3、1.19.x~26.1、1.18.x（默认：26.2~26.3）。
+**版本**：要使用的 Minecraft 版本。选项：26.2-26.3、1.19.x-26.1、1.18.x（默认：26.2-26.3）。
 
 **MinX/MaxX/MinZ/MaxZ/Square side length (x512)**: The coordinate range to search for Swamp Huts. The default values are the world boundaries (-58594 to 58593). Valid range is -30,000,000 to 30,000,000. Square side length option can search specified length of square centered at (0,0) (default 117188).
 
@@ -219,7 +219,7 @@ java -jar dist\LowYSwampHut-2.0.2.jar --seed [你的种子]
 | `--export-seeds`            | Export hit seeds only / 仅导出命中种子  | Off / 不导出                    |
 | `--no-progress`             | Disable progress output / 关闭进度输出  | progress enabled / 默认显示进度 |
 
-**Version values / 版本可选值:** `26.2~26.3`, `1.19.x~26.1`, `1.18.x`
+**Version values / 版本可选值:** `26.2-26.3`, `1.19.x-26.1`, `1.18.x`
 **Preset values / 世界类型可选值:** `normal` (普通世界), `large-biomes` (巨型生物群系), `single-biome` (单生物群系(沼泽))
 
 **Search area / 搜索范围** — if you do not specify any range options, **Single seed / 单种子** uses the
