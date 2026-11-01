@@ -1,0 +1,288 @@
+plugins {
+    id 'java'
+}
+
+group = 'project'
+version = '2.0.2'
+
+/*
+ * Native contract with the LowYSwampHutFinderBase directory / submodule:
+ *
+ *   LowYSwampHutFinderBase owns every line of C code (phase 1 + phase 2),
+ *   the JNI bridge and the standalone CLI.
+ *
+ *   :lowyswamphutfinderbase:copyNativeArtifacts
+ *       -> LowYSwampHutFinderBase/build/native/LowYSwampHutFinderBase.dll
+ *   :lowyswamphutfinderbase:copyCliArtifact
+ *       -> LowYSwampHutFinderBase/build/cli/LowYSwampHutFinderBase-cli.exe
+ *
+ *   The Java side only depends on:
+ *     1. the JNI signatures in project.NativePhase1 / project.NativePhase2,
+ *        checked against LowYSwampHutFinderBase/jni/generated/*.h by
+ *        verifyJniContract;
+ *     2. the DLL embedded into the jar as /native/LowYSwampHutFinderBase.dll.
+ *
+ *   The .gitmodules entry currently records the target GitHub URL only; the
+ *   directory is a placeholder until https://github.com/M33Galaxy/LowYSwampHutFinderBase
+ *   exists. checkLowYSwampHutBaseSubmodule fails fast when the directory is
+ *   incomplete, before MSYS2/CMake produces a much less obvious error.
+ */
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.withType(JavaExec).configureEach {
+    // JDK 24+ warns on System.load() unless native access is granted.
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+}
+
+dependencies {
+}
+
+def generatedNativeResourcesDir = layout.buildDirectory.dir('generated/native-resources')
+def baseNativeDir = file('LowYSwampHutFinderBase/build/native')
+def baseCliExe = file('LowYSwampHutFinderBase/build/cli/LowYSwampHutFinderBase-cli.exe')
+def baseDll = file('LowYSwampHutFinderBase/build/native/LowYSwampHutFinderBase.dll')
+def baseJniDir = file('LowYSwampHutFinderBase/jni/generated')
+def mainCliDir = layout.buildDirectory.dir('cli')
+
+def resolveJavac() {
+    def candidates = []
+    // Gradle runs on the JDK that builds the project; prefer it over a stale
+    // JAVA_HOME that may point at an older JDK.
+    def runtimeHome = System.getProperty('java.home')
+    if (runtimeHome) {
+        candidates << new File(runtimeHome, 'bin/javac.exe')
+        candidates << new File(runtimeHome, 'bin/javac')
+    }
+    def javaHome = System.getenv('JAVA_HOME')
+    if (javaHome) {
+        candidates << new File(javaHome, 'bin/javac.exe')
+        candidates << new File(javaHome, 'bin/javac')
+    }
+    def path = System.getenv('PATH')
+    if (path) {
+        path.split(File.pathSeparator).each { dir ->
+            candidates << new File(dir, 'javac.exe')
+            candidates << new File(dir, 'javac')
+        }
+    }
+    def found = candidates.find { it.isFile() }
+    if (found == null) {
+        throw new GradleException('javac not found. Set JAVA_HOME to a JDK 17+ directory.')
+    }
+    return found
+}
+
+/**
+ * Fails fast when LowYSwampHutFinderBase (and the JNI contract headers it owns)
+ * is not present. The directory is a placeholder until the GitHub repository is
+ * created; once it is a real submodule this is still the useful first check.
+ */
+def checkLowYSwampHutBaseSubmodule = tasks.register('checkLowYSwampHutBaseSubmodule') {
+    group = 'verification'
+    description = 'Verifies LowYSwampHutFinderBase and its JNI contract headers are initialized'
+    doLast {
+        def required = [
+                'LowYSwampHutFinderBase/build.gradle',
+                'LowYSwampHutFinderBase/CMakeLists.txt',
+                'LowYSwampHutFinderBase/src/main.c',
+                'LowYSwampHutFinderBase/src/jni_bridge.c',
+                'LowYSwampHutFinderBase/src/eval.h',
+                'LowYSwampHutFinderBase/src/search.h',
+                'LowYSwampHutFinderBase/build_cli.ps1',
+                'LowYSwampHutFinderBase/build_jni.ps1',
+                'LowYSwampHutFinderBase/jni/generated/project_NativePhase1.h',
+                'LowYSwampHutFinderBase/jni/generated/project_NativePhase2.h'
+        ]
+        def missing = required.findAll { !file(it).exists() }
+        if (!missing.isEmpty()) {
+            throw new GradleException(
+                    'LowYSwampHutFinderBase is not initialized correctly. Missing: '
+                            + missing.join(', ')
+                            + '. Restore the directory, or once the GitHub repository exists run: '
+                            + 'git submodule update --init --recursive')
+        }
+
+        def gitmodules = file('.gitmodules')
+        if (!gitmodules.exists() || !gitmodules.text.contains('LowYSwampHutFinderBase')) {
+            throw new GradleException(
+                    '.gitmodules does not declare the LowYSwampHutFinderBase submodule. '
+                            + 'Expected url = https://github.com/M33Galaxy/LowYSwampHutFinderBase.git')
+        }
+    }
+}
+
+/**
+ * The Java classes are the source of truth for JNI signatures. Regenerate the
+ * headers and compare them with the checked-in copies owned by the base
+ * repository, so the two sides cannot drift silently.
+ */
+def verifyJniContract = tasks.register('verifyJniContract') {
+    group = 'verification'
+    description = 'Checks project.NativePhase1/2 against the JNI headers owned by LowYSwampHutFinderBase'
+    dependsOn checkLowYSwampHutBaseSubmodule
+
+    def bridgeSources = [
+            file('src/main/java/project/NativePhase1.java'),
+            file('src/main/java/project/NativePhase2.java')
+    ]
+    def contractDir = layout.buildDirectory.dir('generated/jni-contract')
+    inputs.files(bridgeSources)
+    inputs.dir(baseJniDir)
+    outputs.dir(contractDir)
+
+    doLast {
+        def outDir = contractDir.get().asFile
+        delete(outDir)
+        outDir.mkdirs()
+        def classesDir = new File(outDir, 'classes')
+        classesDir.mkdirs()
+        def javac = resolveJavac()
+        exec {
+            commandLine javac.absolutePath, '-encoding', 'UTF-8', '--release', '17',
+                    '-d', classesDir.absolutePath,
+                    '-h', outDir.absolutePath
+            args bridgeSources.collect { it.absolutePath }
+        }
+
+        def normalize = { File f ->
+            f.getText('UTF-8').readLines()
+                    .collect { it.replaceAll(/\s+$/, '') }
+                    .findAll { !it.trim().isEmpty() }
+                    .join('\n')
+        }
+
+        ['project_NativePhase1.h', 'project_NativePhase2.h'].each { headerName ->
+            def generated = new File(outDir, headerName)
+            def expected = new File(baseJniDir, headerName)
+            if (!generated.exists()) {
+                throw new GradleException("javac did not produce ${generated}")
+            }
+            if (!expected.exists()) {
+                throw new GradleException(
+                        "Missing ${expected}. The base repository owns the JNI contract headers; "
+                                + 'restore them before building.')
+            }
+            if (normalize(generated) != normalize(expected)) {
+                throw new GradleException(
+                        "JNI contract drift: ${headerName} differs from "
+                                + "LowYSwampHutFinderBase/jni/generated/${headerName}. "
+                                + 'Regenerate the header from NativePhase1/2.java and commit it in '
+                                + 'LowYSwampHutFinderBase.')
+            }
+        }
+    }
+}
+
+tasks.register('prepareNativeResources') {
+    group = 'build'
+    description = 'Collects LowYSwampHutFinderBase.dll into jar resources (/native)'
+    dependsOn checkLowYSwampHutBaseSubmodule, verifyJniContract
+    dependsOn ':lowyswamphutfinderbase:copyNativeArtifacts'
+    inputs.files(baseDll).optional()
+    outputs.dir(generatedNativeResourcesDir)
+
+    doLast {
+        def dll = baseDll
+        if (!dll.isFile()) {
+            throw new GradleException(
+                    "Native DLL missing after :lowyswamphutfinderbase:copyNativeArtifacts: ${dll}. "
+                            + 'Check the MSYS2/CMake output above.')
+        }
+        def outDir = generatedNativeResourcesDir.get().asFile
+        delete(outDir)
+        outDir.mkdirs()
+        copy {
+            from dll
+            into new File(outDir, 'native')
+        }
+    }
+}
+
+tasks.named('processResources') {
+    dependsOn prepareNativeResources
+    from generatedNativeResourcesDir
+}
+
+// The single fat JAR for the product. No third-party dependencies today, so a
+// plain Jar task is enough (no custom Gradle plugin and no network access).
+tasks.register('buildMainJar', Jar) {
+    group = 'build'
+    description = 'Creates the runnable LowYSwampHut jar with the base submodule DLL embedded'
+    archiveBaseName.set('LowYSwampHut')
+    archiveVersion.set(project.version.toString())
+    archiveClassifier.set('')
+    dependsOn tasks.named('classes'), tasks.named('processResources')
+    from sourceSets.main.output
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest {
+        attributes 'Main-Class': 'project.Launcher'
+        attributes 'Enable-Native-Access': 'ALL-UNNAMED'
+        attributes 'Implementation-Title': 'LowYSwampHut'
+        attributes 'Implementation-Version': project.version.toString()
+    }
+}
+
+// Keep the plain Java jar out of the deliverable name; buildMainJar owns
+// build/libs/LowYSwampHut-<version>.jar.
+tasks.named('jar') {
+    archiveClassifier.set('thin')
+}
+
+tasks.register('buildNative') {
+    group = 'build'
+    description = 'Builds LowYSwampHutFinderBase.dll via the base subproject'
+    dependsOn checkLowYSwampHutBaseSubmodule, verifyJniContract
+    dependsOn ':lowyswamphutfinderbase:copyNativeArtifacts'
+}
+
+tasks.register('buildNativeCli') {
+    group = 'build'
+    description = 'Builds the standalone LowYSwampHutFinderBase-cli.exe via the base subproject'
+    dependsOn checkLowYSwampHutBaseSubmodule
+    dependsOn ':lowyswamphutfinderbase:copyCliArtifact'
+}
+
+// Keeps the main module's own copy of the standalone CLI next to the JAR.
+tasks.register('collectNativeCli', Copy) {
+    group = 'build'
+    description = 'Copies LowYSwampHutFinderBase-cli.exe into build/cli'
+    dependsOn buildNativeCli
+    from baseCliExe
+    into mainCliDir
+    doFirst {
+        if (!baseCliExe.isFile()) {
+            throw new GradleException(
+                    "Standalone CLI missing after :lowyswamphutfinderbase:copyCliArtifact: ${baseCliExe}")
+        }
+    }
+}
+
+tasks.register('buildDistribution') {
+    group = 'build'
+    description = 'One-shot: check base + JNI contract -> DLL + runnable JAR + standalone CLI'
+    dependsOn buildMainJar, collectNativeCli
+}
+
+tasks.register('buildAllJars') {
+    group = 'build'
+    description = 'Alias of buildDistribution'
+    dependsOn buildDistribution
+}
+
+tasks.named('build') {
+    dependsOn buildDistribution
+}
+
+['checkLowYSwampHutBaseSubmodule', 'verifyJniContract', 'prepareNativeResources',
+ 'buildNative', 'buildNativeCli', 'collectNativeCli', 'compileJava', 'processResources',
+ 'buildMainJar', 'buildDistribution'].each { taskName ->
+    tasks.named(taskName).configure { mustRunAfter clean }
+}

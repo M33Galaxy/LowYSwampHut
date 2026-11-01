@@ -13,6 +13,44 @@ A GUI program for searching low Y-coordinate Swamp Huts in Minecraft Java Editio
 
 一个用于搜索 Minecraft Java 版低 Y 坐标女巫小屋的 GUI 程序。本程序支持 1.18及以上 版本。
 
+## Repository layout / 仓库结构
+
+| Path | Purpose / 用途 |
+|---|---|
+| `src/main/java/project/` | Java Swing GUI + CLI（原 `LowYSwampHut-main/src`，已平摊到根目录） |
+| `src/main/resources/` | messages / icon / font |
+| `build.gradle`, `settings.gradle.kts`, `gradlew.bat` | main Gradle build / 主构建 |
+| `LowYSwampHutFinderBase/` | native C core, JNI DLL, standalone CLI, JNI contract headers / C 内核与独立 CLI |
+| `build-dist.ps1`, `build.bat` | one-shot packaging into `dist\` / 一键打包到 `dist\` |
+
+`LowYSwampHutFinderBase` 已作为 **git submodule** 链接到：
+<https://github.com/M33Galaxy/LowYSwampHutFinderBase>。`.gitmodules` 记录 URL，主库
+index 里的 gitlink 指向 Base 的 `main` 分支 initial commit（本地创建，尚未 push）。
+克隆主库后初始化子模块：
+
+```powershell
+git submodule update --init --recursive
+```
+
+> ⚠️ Base 的 initial commit 目前只在本地。**提交/推送主库之前，先把 Base push 到远程**
+> （`git -C LowYSwampHutFinderBase push -u origin main`），否则主库 gitlink 指向的 commit
+> 在 GitHub 上不存在，别人 clone 后无法初始化子模块。
+
+### 主/子模块契约 / Main–Base contract
+
+- Base 拥有 **全部 C 代码**、`LowYSwampHutFinderBase.dll`、`LowYSwampHutFinderBase-cli.exe`
+  和 `jni/generated/project_NativePhase1.h` / `project_NativePhase2.h`。
+- 主模块的 `settings.gradle.kts` 把 Base 作为 Gradle 子工程
+  `:lowyswamphutfinderbase` 引入；`build.gradle` 只消费它的两个产物：
+  `build/native/LowYSwampHutFinderBase.dll` 和
+  `build/cli/LowYSwampHutFinderBase-cli.exe`。
+- `verifyJniContract` 用 `javac -h` 从 `NativePhase1/2.java` 重新生成 JNI 头文件，并逐行
+  对比 Base 里的签入副本；任一方的 native 签名漂移都会让 `gradlew build` 失败。
+- `prepareNativeResources` 把 DLL 放进 jar 的 `/native/`；
+  `NativePhase1` 按名字加载 `LowYSwampHutFinderBase.dll`（JNI 符号仍是 `Java_project_*`）。
+- 只有在 Base 目录完整（构建脚本、源码、契约头文件都在）时，主构建才会继续；
+  缺文件时 `checkLowYSwampHutBaseSubmodule` 会直接报错并给出修复提示。
+
 ## How to Run / 如何运行
 
 **This program requires Java 17 or higher.** Please make sure you have Java installed.
@@ -20,25 +58,32 @@ A GUI program for searching low Y-coordinate Swamp Huts in Minecraft Java Editio
 **此程序需要 Java 17 或更高版本。** 请确保您已安装 Java。
 
 > ✅ **The runnable jar is built into `dist\`** by double-clicking `build.bat`
-> (or `LowYSwampHut-main\build-dist.ps1`). The script builds `lysh.dll` then
-> packs `LowYSwampHut-<AppVersion>.jar` (e.g. `LowYSwampHut-2.0.2.jar`).
+> (or `build-dist.ps1` at the repository root). The script runs Gradle, which builds
+> `LowYSwampHutFinderBase.dll` + `LowYSwampHutFinderBase-cli.exe` from the Base
+> subproject and then packs `LowYSwampHut-<AppVersion>.jar` (e.g. `LowYSwampHut-2.0.2.jar`).
 > After that, `java -jar dist\LowYSwampHut-2.0.2.jar`
 > (or double-clicking `dist\run.bat`) opens the GUI. See **Command Line / 命令行** below.
 >
-> ✅ **可直接运行的 jar：双击仓库根目录 `build.bat`**（或跑
-> `LowYSwampHut-main\build-dist.ps1`）生成到 `dist\`。脚本会先编译 `lysh.dll`，
-> 再打出 `LowYSwampHut-<AppVersion>.jar`（例如 `LowYSwampHut-2.0.2.jar`）。
+> ✅ **可直接运行的 jar：双击仓库根目录 `build.bat`**（或跑根目录 `build-dist.ps1`）生成到 `dist\`。
+> 脚本走 Gradle：先由 Base 子工程编译 `LowYSwampHutFinderBase.dll` 与
+> `LowYSwampHutFinderBase-cli.exe`，再打出 `LowYSwampHut-<AppVersion>.jar`（例如 `LowYSwampHut-2.0.2.jar`）。
 > 之后 `java -jar dist\LowYSwampHut-2.0.2.jar`（或双击 `dist\run.bat`）即可打开 GUI。
 > 详见下方 **Command Line / 命令行**。
 >
 > The product is **dependency-free and self-contained**: every terrain / structure judgement is made
-> by the C core, which travels **inside** the jar (`/native/lysh.dll`) and is released to a per-user
-> cache on first run. A loose `lysh.dll` next
+> by the C core, which travels **inside** the jar (`/native/LowYSwampHutFinderBase.dll`) and is released
+> to a per-user cache on first run. A loose `LowYSwampHutFinderBase.dll` next
 > to the jar is optional — it only overrides the embedded one.
 >
 > 本产品**不依赖任何第三方 jar，且是自足的单文件**：所有地形 / 结构判定都由 C 内核完成，
-> 内核**内嵌在 jar 里**（`/native/lysh.dll`），首次运行时释放到每用户缓存目录。jar 旁边的 `lysh.dll` 是可选的 —— 它只用于
-> 覆盖内嵌的那一份。
+> 内核**内嵌在 jar 里**（`/native/LowYSwampHutFinderBase.dll`），首次运行时释放到每用户缓存目录。
+> jar 旁边的 `LowYSwampHutFinderBase.dll` 是可选的 —— 它只用于覆盖内嵌的那一份。
+>
+> **Repository split / 仓库拆分**：本仓库只保留 Java GUI / CLI 外壳（原 `LowYSwampHut-main/`
+> 的内容平摊到根目录）。C 内核、JNI 库和独立 CLI 全部在 `LowYSwampHutFinderBase/`
+> （<https://github.com/M33Galaxy/LowYSwampHutFinderBase>），已作为 git submodule 链接；
+> Base 的 initial commit 目前在本地，尚未 push 到远程。克隆后执行
+> `git submodule update --init --recursive`。
 
 You can right-click the jar file and select "Java(TM) Platform SE binary" as the opening method.
 
@@ -60,9 +105,9 @@ You can change -Xms2048m -Xmx4096m to the memory size you want. It is recommende
 
 您可以将 -Xms2048m -Xmx4096m 更改为您想要的内存大小。建议为此程序分配至少 4GB 的内存。
 
-**Startup is immediate.** All terrain and structure judgement is done by the C core (`lysh.dll`), which loads in milliseconds.
+**Startup is immediate.** All terrain and structure judgement is done by the C core (`LowYSwampHutFinderBase.dll`), which loads in milliseconds.
 
-**启动是即时的。** 所有地形 / 结构判定由 C 内核（`lysh.dll`）完成，毫秒级加载。
+**启动是即时的。** 所有地形 / 结构判定由 C 内核（`LowYSwampHutFinderBase.dll`）完成，毫秒级加载。
 
 ## How to Use? / 如何使用？
 
@@ -156,15 +201,17 @@ The same JAR supports both the GUI and command-line search. **Launching without 
 
 同一个 JAR 同时支持图形界面与命令行搜索。**不带参数启动时打开 GUI。** 命令行搜索需传入 `--seed` 及可选参数。
 
-One way to build (offline, no Gradle, no network) — double-click `build.bat`, or:
+One way to build — double-click `build.bat`, or run Gradle directly:
 
-只有一种构建方式（离线，无需 Gradle 与网络）—— 双击仓库根目录的 `build.bat`，或：
+构建方式 —— 双击仓库根目录的 `build.bat`，或直接跑 Gradle：
 
 ```powershell
-# Builds lysh.dll (CMake + gcc) then the jar. Use -SkipNative to reuse an existing DLL.
-powershell -NoProfile -ExecutionPolicy Bypass -File LowYSwampHut-main\build-dist.ps1
-# Plain javac --release 17 + jar, offline. The product needs no third-party jar today; if a
-# future version does, add -classpath at the marked spot in build-dist.ps1 -- nothing blocks it.
+# Full product: Base DLL + standalone CLI + runnable jar (single Gradle build path).
+powershell -NoProfile -ExecutionPolicy Bypass -File build-dist.ps1
+# Equivalent:  .\gradlew.bat clean buildDistribution
+
+# The compatibility script passes -PskipNativeBuild=true when -SkipNative is given.
+powershell -NoProfile -ExecutionPolicy Bypass -File build-dist.ps1 -SkipNative
 ```
 
 It writes `dist\` / 它会生成 `dist\`：
@@ -172,23 +219,30 @@ It writes `dist\` / 它会生成 `dist\`：
 | File / 文件 | What it is / 说明 |
 |---|---|
 | `LowYSwampHut-<VERSION>.jar` | product classes + resources **+ the embedded C core**; `VERSION` = `project.AppVersion.VERSION`（含内嵌 C 内核，单文件即可运行） |
-| `lysh.dll` | optional: overrides the embedded core / 可选：覆盖内嵌内核 |
+| `LowYSwampHutFinderBase.dll` | optional: overrides the embedded core / 可选：覆盖内嵌内核 |
+| `LowYSwampHutFinderBase-cli.exe` | standalone native CLI (`--out` writes `/tp` lines) / 独立原生 CLI |
 | `run.bat` | double-click launcher / 双击启动 |
 | `README.txt` | layout and requirements / 布局与依赖说明 |
 
 `project.NativePhase1` looks for the library in this order: `-Dlowyswamphut.nativeLib`,
-`LYSH_NATIVE_LIB`, `<cwd>\lysh-c\build\cmake\lysh.dll`, `<cwd>\build\cmake\lysh.dll`,
-`<jar folder>\lysh.dll`, `<jar folder>\native\lysh.dll`, **the `lysh.dll` embedded in the jar**
-(released to `%LOCALAPPDATA%\LowYSwampHut\native\<sha256-16>\`), then `System.loadLibrary("lysh")`.
+`LYSH_NATIVE_LIB`, `<cwd>\LowYSwampHutFinderBase\build\native\LowYSwampHutFinderBase.dll`,
+`<cwd>\LowYSwampHutFinderBase\build\cmake\bin\LowYSwampHutFinderBase.dll`,
+`<jar folder>\LowYSwampHutFinderBase.dll`, `<jar folder>\native\LowYSwampHutFinderBase.dll`,
+**the `LowYSwampHutFinderBase.dll` embedded in the jar**
+(released to `%LOCALAPPDATA%\LowYSwampHut\native\<sha256-16>\`), then
+`System.loadLibrary("LowYSwampHutFinderBase")`.
 That embedded fallback is why one jar runs anywhere with no environment variables — but note
 that **the `<cwd>` entries win over everything else**, so when testing a specific build always pin
 `-Dlowyswamphut.nativeLib=<absolute path>`.
 
 `project.NativePhase1` 的查找顺序：`-Dlowyswamphut.nativeLib`、`LYSH_NATIVE_LIB`、
-`<工作目录>\lysh-c\build\cmake\lysh.dll`、`<工作目录>\build\cmake\lysh.dll`、
-`<jar 所在目录>\lysh.dll`、`<jar 所在目录>\native\lysh.dll`、**jar 内嵌的 `/native/lysh.dll`**
-（释放到 `%LOCALAPPDATA%\LowYSwampHut\native\<sha256-16>\`），最后是 `System.loadLibrary("lysh")`。
-内嵌那一档就是"单文件 jar 拷到哪都能跑、不需要任何环境变量"的原因 —— 但要注意**`<工作目录>` 那两条
+`<工作目录>\LowYSwampHutFinderBase\build\native\LowYSwampHutFinderBase.dll`、
+`<工作目录>\LowYSwampHutFinderBase\build\cmake\bin\LowYSwampHutFinderBase.dll`、
+`<jar 所在目录>\LowYSwampHutFinderBase.dll`、`<jar 所在目录>\native\LowYSwampHutFinderBase.dll`、
+**jar 内嵌的 `/native/LowYSwampHutFinderBase.dll`**
+（释放到 `%LOCALAPPDATA%\LowYSwampHut\native\<sha256-16>\`），最后是
+`System.loadLibrary("LowYSwampHutFinderBase")`。
+内嵌那一档就是"单文件 jar 拷到哪都能跑、不需要任何环境变量"的原因 —— 但要注意**`<工作目录>` 那几条
 赢过其它所有候选**，所以测某个特定构建时一定要用 `-Dlowyswamphut.nativeLib=<绝对路径>` 钉死。
 
 **Search range note:** `--min-x/--max-x/--min-z/--max-z` are **region coordinates**
@@ -261,13 +315,13 @@ During CLI search, progress is printed to the terminal (single merged progress p
 
 ## Libraries mainly used in this program / 此程序主要使用的库
 
-- The **C core** `lysh.dll` (sources in `lysh-c/`) — performs all phase 1 / phase 2 computation: climate, cave ladder, continentalness, exact footprint average height, aquifer flood judgement, the **real biome gate**, and the **cave/canyon carving layer** (the hut Y is the post-carve surface). Its full technical documentation is in [`lysh-c/README.md`](lysh-c/README.md).
+- The **C core** `LowYSwampHutFinderBase.dll` (sources in `LowYSwampHutFinderBase/`) — performs all phase 1 / phase 2 computation: climate, cave ladder, continentalness, exact footprint average height, aquifer flood judgement, the **real biome gate**, and the **cave/canyon carving layer** (the hut Y is the post-carve surface). Its full technical documentation is in [`LowYSwampHutFinderBase/README.md`](LowYSwampHutFinderBase/README.md).
 - [SeedFinding](https://github.com/hube12/SeedFinding), [SeedChecker](https://github.com/jellejurre/seed-checker) and [Noise Sampler](https://github.com/KalleStruik/noise-sampler) were the libraries of the deleted Java fallback path; their algorithms now live inside the C core. No Mojang or SeedChecker jar is shipped or required any more.
-- The swamp-hut biome gate needs Minecraft's own multi-noise biome lookup. Its per-version **R-tree parameter data** is vendored from [cubiomes](https://github.com/Cubitect/cubiomes) (MIT) into `lysh-c/src/biome_tree_{18,215,262}.h`, with provenance in each file.
+- The swamp-hut biome gate needs Minecraft's own multi-noise biome lookup. Its per-version **R-tree parameter data** is vendored from [cubiomes](https://github.com/Cubitect/cubiomes) (MIT) into `LowYSwampHutFinderBase/src/biome_tree_{18,215,262}.h`, with provenance in each file.
 
-- **C 内核 `lysh.dll`**（源码在 `lysh-c/`）—— 承担全部阶段 1 / 阶段 2 计算：气候、洞穴梯子、大陆性、精确 footprint 平均高度、含水层判定、**真实群系门**，以及**洞穴 / 峡谷雕刻层**（小屋 Y 取的是挖过之后的表面）。完整的技术文档见 [`lysh-c/README.md`](lysh-c/README.md)。
+- **C 内核 `LowYSwampHutFinderBase.dll`**（源码在 `LowYSwampHutFinderBase/`）—— 承担全部阶段 1 / 阶段 2 计算：气候、洞穴梯子、大陆性、精确 footprint 平均高度、含水层判定、**真实群系门**，以及**洞穴 / 峡谷雕刻层**（小屋 Y 取的是挖过之后的表面）。完整的技术文档见 [`LowYSwampHutFinderBase/README.md`](LowYSwampHutFinderBase/README.md)。
 - [SeedFinding](https://github.com/hube12/SeedFinding)、[SeedChecker](https://github.com/jellejurre/seed-checker)、[Noise Sampler](https://github.com/KalleStruik/noise-sampler) 属于已删除的 Java 回退路径；其算法已进入 C 内核。现在既不打包、也不需要任何 Mojang / SeedChecker jar。
-- 群系门需要 Minecraft 自己的多噪声群系查找：它**按版本**的 R 树参数表 vendored 自 [cubiomes](https://github.com/Cubitect/cubiomes)（MIT），位于 `lysh-c/src/biome_tree_{18,215,262}.h`，出处写在每个文件头部。
+- 群系门需要 Minecraft 自己的多噪声群系查找：它**按版本**的 R 树参数表 vendored 自 [cubiomes](https://github.com/Cubitect/cubiomes)（MIT），位于 `LowYSwampHutFinderBase/src/biome_tree_{18,215,262}.h`，出处写在每个文件头部。
 
 ## Credits / 致谢
 
@@ -283,19 +337,19 @@ During CLI search, progress is printed to the terminal (single merged progress p
 
 ## Notes / 注意事项
 
-- The search runs phase 1 + phase 2 **in one pass** inside the C core (`lysh.dll`); results are emitted as each Z-band completes, which is why hits can appear before the single progress bar reaches 100%.
+- The search runs phase 1 + phase 2 **in one pass** inside the C core (`LowYSwampHutFinderBase.dll`); results are emitted as each Z-band completes, which is why hits can appear before the single progress bar reaches 100%.
 - The reported Y is the exact average footprint height (`avg_y`) from the C core — which equals to swamp huts' true Y values.
 - The jar contains no Mojang / SeedChecker code, and it is **self-contained**: `java -jar dist\LowYSwampHut-2.0.2.jar` is enough on its own — the C core is embedded and released to the per-user cache on first run.
 - The "Precise Generation Check" checkbox and the `--check-gen` flag have been **removed** . There is no `×` / "x" "cannot generate" marker any more — it is structurally impossible.
-- The C core is required at run time but ships **inside** the jar, so there is nothing to install. A loose `lysh.dll` (or `-Dlowyswamphut.nativeLib` / `LYSH_NATIVE_LIB`) overrides the embedded one. If no core can be loaded, the GUI still opens but reports that the native core is unavailable.
+- The C core is required at run time but ships **inside** the jar, so there is nothing to install. A loose `LowYSwampHutFinderBase.dll` (or `-Dlowyswamphut.nativeLib` / `LYSH_NATIVE_LIB`) overrides the embedded one. If no core can be loaded, the GUI still opens but reports that the native core is unavailable.
 - For large searching area, the search may take a long time. It is recommended to use appropriate thread counts based on your computer's performance.
 - When searching from a seed list, it is not recommended to load a list with more than 10 million seeds.
 
-- 搜索在 C 内核（`lysh.dll`）里把阶段 1 + 阶段 2 **一趟跑完**；结果在每个 Z 带完成时输出，这就是为什么进度条到 100% 之前就可能出现命中。
+- 搜索在 C 内核（`LowYSwampHutFinderBase.dll`）里把阶段 1 + 阶段 2 **一趟跑完**；结果在每个 Z 带完成时输出，这就是为什么进度条到 100% 之前就可能出现命中。
 - 输出的 Y 是 C 内核给出的精确 footprint 平均高度（`avg_y`）—— 等于女巫小屋的真实Y值。
 - jar 内不含任何 Mojang / SeedChecker 代码，且**自足**：`java -jar dist\LowYSwampHut-2.0.2.jar` 单独就能跑 —— C 内核内嵌在 jar 里，首次运行时释放到每用户缓存目录。
 - "精确检查生成情况"控件与 `--check-gen` 开关已**删除**；`×` / "x"（"无法生成"）标记也已彻底不存在 —— 它在结构上已不可能产生。
-- C 内核是运行时必需的，但它**内嵌在 jar 里**，无需额外安装。jar 旁边的 `lysh.dll`（或 `-Dlowyswamphut.nativeLib` / `LYSH_NATIVE_LIB`）会覆盖内嵌的那一份。一份都加载不到时 GUI 仍能打开，但会提示原生内核不可用。
+- C 内核是运行时必需的，但它**内嵌在 jar 里**，无需额外安装。jar 旁边的 `LowYSwampHutFinderBase.dll`（或 `-Dlowyswamphut.nativeLib` / `LYSH_NATIVE_LIB`）会覆盖内嵌的那一份。一份都加载不到时 GUI 仍能打开，但会提示原生内核不可用。
 - 对于大范围的坐标搜索，可能需要较长时间。建议根据您的计算机性能使用适当的线程数。
 - 从种子列表搜索时，不建议加载超过 1000 万种子的列表。
 
