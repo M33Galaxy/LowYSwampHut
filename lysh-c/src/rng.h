@@ -19,6 +19,7 @@
 #ifndef LYSH_RNG_H
 #define LYSH_RNG_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct { uint64_t lo, hi; } xoroshiro_t;
